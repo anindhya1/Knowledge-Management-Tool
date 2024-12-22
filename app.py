@@ -260,4 +260,4 @@ elif section == "Generate Connections":
 
 # Footer
 st.sidebar.markdown("---")
-st.sidebar.markdown("Built with ❤️ using Streamlit.")
+st.sidebar.markdown("Built using Streamlit.")
