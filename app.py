@@ -10,7 +10,13 @@ from bs4 import BeautifulSoup
 from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
 from keybert import KeyBERT
+from transformers import pipeline
+import PyPDF2
+from docx import Document
 import os
+
+# Initialize a local text-generation pipeline
+text_generator = pipeline("text-generation", model="gpt2")
 
 # NLP models
 model = SentenceTransformer('all-MiniLM-L6-v2')
@@ -23,97 +29,73 @@ if "knowledge_data.csv" not in os.listdir():
 # Load existing data
 data = pd.read_csv("knowledge_data.csv")
 
-# Helper functions
-def extract_youtube_content(url):
-    """Extract transcript content from a YouTube video."""
-    video_id = urlparse(url).query.split("v=")[-1]
-    transcript = ""
-    try:
-        transcript_data = YouTubeTranscriptApi.get_transcript(video_id)
-        transcript = " ".join([entry["text"] for entry in transcript_data])
-    except Exception as e:
-        transcript = f"Transcript not available: {e}"
-    return transcript
+# Custom CSS for theming
+def add_custom_css():
+    st.markdown(
+        """
+        <style>
+        body {
+            background-color: #ffffff;
+            color: #333333;
+        }
+        .stSidebar {
+            background-color: rgba(0, 128, 128, 0.2);
+        }
+        .stButton>button {
+            background-color: #008080;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            padding: 0.5rem 1rem;
+        }
+        .stButton>button:hover {
+            background-color: #005757;
+            transform: scale(1.05);
+            transition: all 0.2s ease-in-out;
+        }
+        .stSidebar .stButton {
+            margin: 10px 0;
+            width: 90%;
+        }
+        .stSidebar .stButton>button {
+            background-color: #008080;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            padding: 0.5rem 1rem;
+        }
+        .stSidebar .stButton>button:hover {
+            background-color: #005757;
+            transform: scale(1.05);
+            transition: all 0.2s ease-in-out;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
 
-def extract_article_content(url):
-    """Extract text content from an article."""
-    article = Article(url)
-    article.download()
-    article.parse()
-    return article.text
+# Add CSS to the app
+add_custom_css()
 
-def extract_generic_content(url):
-    """Scrape visible text from a generic webpage."""
-    response = requests.get(url)
-    soup = BeautifulSoup(response.content, "html.parser")
-    paragraphs = soup.find_all("p")
-    text = " ".join([p.get_text() for p in paragraphs])
-    return text
-
-def extract_key_phrases(content, top_n=5):
-    """Extract key phrases using KeyBERT."""
-    keywords = keybert_model.extract_keywords(content, keyphrase_ngram_range=(1, 2), stop_words="english", top_n=top_n)
-    return [kw[0] for kw in keywords]
-
-# Streamlit App
-st.title("Personal Knowledge Management Tool")
-st.markdown("Organize and connect content from online sources.")
-
-# Input form
-st.header("Add Content by URL")
-with st.form("content_entry"):
-    url = st.text_input("Enter the URL (video, article, or other)")
-    submit = st.form_submit_button("Add Content")
-
-if submit:
-    if url:
-        parsed_url = urlparse(url)
-        content = ""
-
-        if "youtube.com" in parsed_url.netloc or "youtu.be" in parsed_url.netloc:
-            content = extract_youtube_content(url)
-        elif "http" in parsed_url.scheme:
-            try:
-                content = extract_article_content(url)
-            except:
-                content = extract_generic_content(url)
-
-        # Add content to data
-        new_entry = {"Source": url, "Content": content}
-        new_row = pd.DataFrame([new_entry])
-        data = pd.concat([data, new_row], ignore_index=True)
-        data.to_csv("knowledge_data.csv", index=False)
-        st.success("Content added successfully!")
-    else:
-        st.error("Please provide a valid URL.")
-
-# Display entries
-st.header("Saved Content")
-if not data.empty:
-    st.write(data)
-else:
-    st.info("No entries found. Add some content to get started!")
-
-# Generate and display knowledge graph
-st.header("Content Connections")
-if st.button("Generate Connections"):
+# Define the generate_knowledge_graph function
+# Define the generate_knowledge_graph function
+def generate_knowledge_graph(data):
+    """Generate and return the knowledge graph."""
     G = nx.Graph()
-
-    # Extract key phrases from each content
     key_phrases = []
     phrase_to_source = {}
+
     for index, row in data.iterrows():
-        phrases = extract_key_phrases(row["Content"])
+        phrases = extract_key_phrases(row["Content"], top_n=10)
         key_phrases.extend(phrases)
         phrase_to_source.update({phrase: row["Source"] for phrase in phrases})
 
-    # Create embeddings for key phrases
     embeddings = model.encode(key_phrases)
-
-    # Compute similarity matrix
     similarity_matrix = cosine_similarity(embeddings)
 
-    # Add nodes and filtered edges
+    # Increased similarity threshold to reduce noise
+    threshold = 0.5
+
     for i, phrase_i in enumerate(key_phrases):
         G.add_node(phrase_i, label=phrase_i, color="green")
         similarity_scores = [
@@ -121,26 +103,161 @@ if st.button("Generate Connections"):
             for j in range(len(key_phrases))
             if i != j and phrase_to_source[phrase_i] != phrase_to_source[key_phrases[j]]
         ]
-        # Sort by similarity and limit connections
-        sorted_scores = sorted(similarity_scores, key=lambda x: x[1], reverse=True)[:3]
+        sorted_scores = sorted(similarity_scores, key=lambda x: x[1], reverse=True)[:3]  # Top 3 connections
         for phrase_j, score in sorted_scores:
-            if score > 0.6:  # Adjust threshold as needed
+            if score > threshold:
                 G.add_edge(phrase_i, phrase_j)
 
-    # Visualize graph
-    if len(G.nodes) > 0:
-        net = Network(height="700px", width="100%")
-        net.from_nx(G)
-        net.write_html("knowledge_graph.html")
+    return G
 
+
+# Helper function to extract key phrases
+def extract_key_phrases(content, top_n=10):
+    """Extract key phrases using KeyBERT."""
+    keywords = keybert_model.extract_keywords(content, keyphrase_ngram_range=(1, 2), stop_words="english", top_n=top_n)
+    return [kw[0] for kw in keywords]
+
+# Generate insights from the graph and data
+# Generate insights from the graph and data
+def generate_insights(G, data):
+    """Generate concise and meaningful insights using Hugging Face LLM."""
+    insights = []
+
+    # Identify key nodes based on degree centrality
+    degree_centrality = nx.degree_centrality(G)
+    avg_centrality = sum(degree_centrality.values()) / len(degree_centrality)
+    threshold = avg_centrality * 1.2  # Adjust threshold for meaningful crux nodes
+    crux_nodes = [node for node, centrality in degree_centrality.items() if centrality >= threshold]
+
+    for crux_node in crux_nodes[:5]:  # Limit to top 5 nodes
+        # Get neighbors and summarize their relationships
+        neighbors = list(G.neighbors(crux_node))
+        neighbor_summary = ", ".join(neighbors[:3])  # Summarize up to 3 neighbors for brevity
+
+        # Extract context for the crux node
+        crux_context = data.loc[data["Content"].str.contains(crux_node, na=False, case=False), "Content"].head(1).values
+        if crux_context.size > 0:  # Explicit check for non-empty array
+            if len(crux_context[0]) > 300:
+                context_summary = crux_context[0][:300] + "..."
+            else:
+                context_summary = crux_context[0]
+        else:
+            context_summary = "No specific context available."
+
+        # Construct prompt for LLM
+        prompt = (
+            f"Concept: {crux_node}\n"
+            f"Connected Themes: {neighbor_summary}\n"
+            f"Context: {context_summary}\n\n"
+            f"Generate a concise and meaningful insight based on this information."
+        )
+
+        # Generate insight using the LLM
         try:
-            with open("knowledge_graph.html", "r") as f:
-                st.components.v1.html(f.read(), height=700)
-        except FileNotFoundError:
-            st.error("Unable to render the graph. The HTML file was not created.")
-    else:
-        st.error("The graph is empty. Add more content to create connections.")
+            llm_response = text_generator(prompt, max_length=100, num_return_sequences=1)[0]["generated_text"]
+            insights.append(llm_response.strip())  # Append only the insight
+        except Exception as e:
+            insights.append(f"Error generating insight for {crux_node}: {e}")
 
-# Instructions
-st.markdown("---")
-st.markdown("**Instructions:** Add content links and generate a graph to visualize relationships.")
+    # Fallback if no insights are generated
+    if not insights:
+        insights = ["No significant insights could be generated from the data."]
+
+    return "\n\n".join(insights)
+
+
+
+
+
+
+
+
+
+# Streamlit App UI
+# Initialize session state for navigation
+if "section" not in st.session_state:
+    st.session_state.section = "Add Content"
+
+# Navigation bar
+st.sidebar.title("")
+if st.sidebar.button("Add Content"):
+    st.session_state.section = "Add Content"
+if st.sidebar.button("Saved Content"):
+    st.session_state.section = "Saved Content"
+if st.sidebar.button("Generate Connections"):
+    st.session_state.section = "Generate Connections"
+
+# Retrieve current section from session state
+section = st.session_state.section
+
+
+# Add Content Section
+if section == "Add Content":
+    st.title("Add New Content")
+    input_type = st.radio("Choose input method:", ["Enter URL", "Upload File", "Enter Text"])
+
+    content = ""
+    source = ""
+
+    if input_type == "Enter URL":
+        url = st.text_input("Enter the URL (video, article, or other)")
+        if st.button("Add Content from URL"):
+            source = url
+            content = f"Extracted content from {url}"  # Replace with real extraction logic
+            st.success("Content added successfully!")
+
+    elif input_type == "Upload File":
+        uploaded_file = st.file_uploader("Upload a file", type=["txt", "pdf", "docx"])
+        if uploaded_file:
+            source = uploaded_file.name
+            content = f"Content from file: {uploaded_file.name}"  # Replace with real file processing logic
+            st.success("File uploaded and processed successfully!")
+
+    elif input_type == "Enter Text":
+        content = st.text_area("Enter text")
+        if st.button("Add Content from Text"):
+            source = "User Input"
+            st.success("Content added successfully!")
+
+    if content:
+        new_entry = {"Source": source, "Content": content}
+        new_row = pd.DataFrame([new_entry])
+        data = pd.concat([data, new_row], ignore_index=True)
+        data.to_csv("knowledge_data.csv", index=False)
+
+# Saved Content Section
+elif section == "Saved Content":
+    st.title("Saved Content")
+    if not data.empty:
+        st.dataframe(data)  # Show saved data in an interactive table
+    else:
+        st.info("No content added yet!")
+
+# Generate Connections Section
+elif section == "Generate Connections":
+    st.title("Generate Connections")
+    if not data.empty:
+        with st.spinner("Generating knowledge graph..."):
+            G = generate_knowledge_graph(data)
+
+            # Display graph
+            net = Network(height="700px", width="100%")
+            net.from_nx(G)
+            net.write_html("knowledge_graph.html")
+            try:
+                with open("knowledge_graph.html", "r") as f:
+                    st.components.v1.html(f.read(), height=700)
+            except FileNotFoundError:
+                st.error("Unable to render the graph.")
+
+        # Generate insights
+        st.header("Graph Insights")
+        insights = generate_insights(G, data)
+        st.subheader("AI-Generated Insights:")
+        st.write(insights)
+    else:
+        st.warning("No data available to generate connections!")
+
+# Footer
+st.sidebar.markdown("---")
+st.sidebar.markdown("Built with ❤️ using Streamlit.")
