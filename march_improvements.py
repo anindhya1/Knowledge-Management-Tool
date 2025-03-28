@@ -10,25 +10,37 @@ from bs4 import BeautifulSoup
 from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
 from keybert import KeyBERT
-from transformers import pipeline
+from transformers import AutoModelForCausalLM, AutoTokenizer
+import torch
 import PyPDF2
 from docx import Document
 import os
 
-# Initialize a local text-generation pipeline
-text_generator = pipeline("text-generation", model="gpt2")
+# Load local LLM (Mistral-7B-Instruct)
+@st.cache_resource
+def load_local_model():
+    tokenizer = AutoTokenizer.from_pretrained("mistralai/Mistral-7B-Instruct-v0.1")
+    model = AutoModelForCausalLM.from_pretrained(
+        "mistralai/Mistral-7B-Instruct-v0.1",
+        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+        device_map="auto"
+    )
+    return tokenizer, model
+
+tokenizer, model = load_local_model()
 
 # NLP models
-model = SentenceTransformer('all-MiniLM-L6-v2')
+model_embed = SentenceTransformer('all-MiniLM-L6-v2')
 keybert_model = KeyBERT(model='all-MiniLM-L6-v2')
 
 # Initialize data storage
 if "knowledge_data.csv" not in os.listdir():
     pd.DataFrame(columns=["Source", "Content"]).to_csv("knowledge_data.csv", index=False)
 
+# Load existing data
 data = pd.read_csv("knowledge_data.csv")
 
-# Custom CSS for styling
+# Custom CSS for theming
 def add_custom_css():
     st.markdown(
         """
@@ -73,21 +85,51 @@ def add_custom_css():
         unsafe_allow_html=True
     )
 
+# Add CSS to the app
 add_custom_css()
 
-# Define the generate_knowledge_graph function
+# --- Extraction Helpers ---
+def extract_youtube_transcript(url):
+    video_id = url.split("v=")[-1]
+    transcript = YouTubeTranscriptApi.get_transcript(video_id)
+    return " ".join([segment['text'] for segment in transcript])
+
+def extract_article_text(url):
+    article = Article(url)
+    article.download()
+    article.parse()
+    return article.text
+
+def extract_file_text(uploaded_file):
+    ext = uploaded_file.name.split('.')[-1]
+    if ext == "txt":
+        return uploaded_file.read().decode("utf-8")
+    elif ext == "pdf":
+        reader = PyPDF2.PdfReader(uploaded_file)
+        return " ".join([page.extract_text() or "" for page in reader.pages])
+    elif ext == "docx":
+        doc = Document(uploaded_file)
+        return "\n".join([para.text for para in doc.paragraphs])
+    return ""
+
+# --- Knowledge Graph & Insights ---
+def extract_key_phrases(content, top_n=10):
+    keywords = keybert_model.extract_keywords(content, keyphrase_ngram_range=(1, 2), stop_words="english", top_n=top_n)
+    return [kw[0] for kw in keywords]
+
 def generate_knowledge_graph(data):
     G = nx.Graph()
     key_phrases = []
     phrase_to_source = {}
 
-    for index, row in data.iterrows():
+    for _, row in data.iterrows():
         phrases = extract_key_phrases(row["Content"], top_n=10)
         key_phrases.extend(phrases)
         phrase_to_source.update({phrase: row["Source"] for phrase in phrases})
 
-    embeddings = model.encode(key_phrases)
+    embeddings = model_embed.encode(key_phrases)
     similarity_matrix = cosine_similarity(embeddings)
+    threshold = 0.5
 
     for i, phrase_i in enumerate(key_phrases):
         G.add_node(phrase_i, label=phrase_i, color="green")
@@ -96,72 +138,97 @@ def generate_knowledge_graph(data):
             for j in range(len(key_phrases))
             if i != j and phrase_to_source[phrase_i] != phrase_to_source[key_phrases[j]]
         ]
-        sorted_scores = sorted(similarity_scores, key=lambda x: x[1], reverse=True)[:5]
+        sorted_scores = sorted(similarity_scores, key=lambda x: x[1], reverse=True)[:3]
         for phrase_j, score in sorted_scores:
-            if score > 0.3:  # Lowered threshold slightly to include more edges
-                G.add_edge(phrase_i, phrase_j)
+            if score > threshold:
+                G.add_edge(phrase_i, phrase_j, weight=float(score))
 
     return G
 
-# Helper function to extract key phrases
-def extract_key_phrases(content, top_n=10):
-    keywords = keybert_model.extract_keywords(content, keyphrase_ngram_range=(1, 2), stop_words="english", top_n=top_n)
-    return [kw[0] for kw in keywords]
+def generate_local_response(prompt, max_tokens=300):
+    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+    output = model.generate(
+        **inputs,
+        max_new_tokens=max_tokens,
+        do_sample=True,
+        temperature=0.7,
+        top_k=50,
+        top_p=0.9
+    )
+    return tokenizer.decode(output[0], skip_special_tokens=True)
 
-# Generate insights from the graph and data
 def generate_insights(G, data):
     insights = []
-
     degree_centrality = nx.degree_centrality(G)
     avg_centrality = sum(degree_centrality.values()) / len(degree_centrality)
-    threshold = avg_centrality * 1.1  # Adjusted threshold to find a balance
-
+    threshold = avg_centrality * 1.2
     crux_nodes = [node for node, centrality in degree_centrality.items() if centrality >= threshold]
 
-    for crux_node in crux_nodes[:5]:  # Limit to top 5 crux nodes for better insights
+    for crux_node in crux_nodes[:5]:
         neighbors = list(G.neighbors(crux_node))
-        sources = data.set_index("Source")["Content"].to_dict()
-        diverse_neighbors = [
-            neighbor for neighbor in neighbors if sources.get(neighbor, None) != sources.get(crux_node, None)
-        ]
-
-        neighbors_to_consider = diverse_neighbors if diverse_neighbors else neighbors
-        related_topics = ", ".join(neighbors_to_consider[:3])
-
+        neighbor_summary = ", ".join(neighbors[:3]) if neighbors else "No direct connections"
         crux_context = data.loc[data["Content"].str.contains(crux_node, na=False, case=False), "Content"].head(1).values
-        context_text = crux_context[0] if len(crux_context) > 0 else f"No specific context for {crux_node}."
+        context_summary = crux_context[0][:1000] if crux_context.size > 0 else "No specific context available."
+        prompt = (
+            f"You are an AI tasked with generating insightful observations.\n\n"
+            f"Focus concept: {crux_node}\n"
+            f"Related themes: {neighbor_summary}\n"
+            f"Context: {context_summary}\n\n"
+            f"Provide a concise and meaningful insight based on the above."
+        )
+        try:
+            response = generate_local_response(prompt)
+            insights.append(response.strip())
+        except Exception as e:
+            insights.append(f"Error generating insight for '{crux_node}': {e}")
 
-        narrative = f"The concept '{crux_node}' highlights connections to themes such as {related_topics}. It is contextualized by: {context_text}"
-        insights.append(narrative)
-
-    if not insights:
-        insights = ["No significant patterns or insights could be generated from the data."]
+    if not insights or all("Error generating insight" in insight for insight in insights):
+        insights = ["No meaningful insights could be generated from the data."]
 
     return "\n\n".join(insights)
 
+# --- Streamlit UI ---
+if "section" not in st.session_state:
+    st.session_state.section = "Add Content"
+
 st.sidebar.title("")
-section = st.sidebar.radio("", ["Add Content", "Saved Content", "Generate Connections"], index=0, format_func=lambda x: x)
+if st.sidebar.button("Add Content"):
+    st.session_state.section = "Add Content"
+if st.sidebar.button("Saved Content"):
+    st.session_state.section = "Saved Content"
+if st.sidebar.button("Generate Connections"):
+    st.session_state.section = "Generate Connections"
+
+section = st.session_state.section
 
 if section == "Add Content":
     st.title("Add New Content")
     input_type = st.radio("Choose input method:", ["Enter URL", "Upload File", "Enter Text"])
-
     content = ""
     source = ""
 
     if input_type == "Enter URL":
         url = st.text_input("Enter the URL (video, article, or other)")
         if st.button("Add Content from URL"):
-            source = url
-            content = f"Extracted content from {url}"
-            st.success("Content added successfully!")
+            try:
+                source = url
+                if "youtube.com" in url or "youtu.be" in url:
+                    content = extract_youtube_transcript(url)
+                else:
+                    content = extract_article_text(url)
+                st.success("Content extracted and added!")
+            except Exception as e:
+                st.error(f"Failed to extract content: {e}")
 
     elif input_type == "Upload File":
         uploaded_file = st.file_uploader("Upload a file", type=["txt", "pdf", "docx"])
         if uploaded_file:
-            source = uploaded_file.name
-            content = f"Content from file: {uploaded_file.name}"
-            st.success("File uploaded and processed successfully!")
+            try:
+                source = uploaded_file.name
+                content = extract_file_text(uploaded_file)
+                st.success("File uploaded and processed successfully!")
+            except Exception as e:
+                st.error(f"Failed to read file: {e}")
 
     elif input_type == "Enter Text":
         content = st.text_area("Enter text")
@@ -187,9 +254,9 @@ elif section == "Generate Connections":
     if not data.empty:
         with st.spinner("Generating knowledge graph..."):
             G = generate_knowledge_graph(data)
-
-            net = Network(height="700px", width="100%")
+            net = Network(height="700px", width="100%", notebook=False)
             net.from_nx(G)
+            net.show_buttons(filter_=['physics'])
             net.write_html("knowledge_graph.html")
             try:
                 with open("knowledge_graph.html", "r") as f:
@@ -205,4 +272,4 @@ elif section == "Generate Connections":
         st.warning("No data available to generate connections!")
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("Built with ❤️ using Streamlit.")
+st.sidebar.markdown("Built using Streamlit.")

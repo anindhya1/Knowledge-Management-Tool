@@ -9,12 +9,16 @@ import requests
 from bs4 import BeautifulSoup
 from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
-from keybert import KeyBERT
+import spacy
 import os
 
-# NLP models
+# Load spaCy model for sentence tokenization
+nlp = spacy.load("en_core_web_sm")
+
+nlp.max_length = 2000000
+
+# NLP model for semantic similarity
 model = SentenceTransformer('all-MiniLM-L6-v2')
-keybert_model = KeyBERT(model='all-MiniLM-L6-v2')
 
 # Initialize data storage
 if "knowledge_data.csv" not in os.listdir():
@@ -50,10 +54,10 @@ def extract_generic_content(url):
     text = " ".join([p.get_text() for p in paragraphs])
     return text
 
-def extract_key_phrases(content, top_n=10):
-    """Extract key phrases using KeyBERT."""
-    keywords = keybert_model.extract_keywords(content, keyphrase_ngram_range=(1, 2), stop_words="english", top_n=top_n)
-    return [kw[0] for kw in keywords]
+def sent_tokenize_spacy(text):
+    """Tokenize text into sentences using spaCy."""
+    doc = nlp(text)
+    return [sent.text for sent in doc.sents]
 
 # Streamlit App
 st.title("Personal Knowledge Management Tool")
@@ -99,39 +103,27 @@ st.header("Content Connections")
 if st.button("Generate Connections"):
     G = nx.Graph()
 
-    # Extract key phrases from each content
-    key_phrases = []
-    phrase_to_source = {}
+    # Process content into sentences
+    content_sentences = []
+    sentence_to_source = {}
     for index, row in data.iterrows():
-        phrases = extract_key_phrases(row["Content"], top_n=10)  # Increase top_n to get more phrases
-        key_phrases.extend(phrases)
-        phrase_to_source.update({phrase: row["Source"] for phrase in phrases})
+        sentences = sent_tokenize_spacy(row["Content"])
+        content_sentences.extend(sentences)
+        sentence_to_source.update({sentence: row["Source"] for sentence in sentences})
 
-    # Debugging: Print extracted key phrases
-    st.write("Extracted Key Phrases:", key_phrases)
-
-    # Create embeddings for key phrases
-    embeddings = model.encode(key_phrases)
+    # Create embeddings for sentences
+    embeddings = model.encode(content_sentences)
 
     # Compute similarity matrix
     similarity_matrix = cosine_similarity(embeddings)
 
-    # Debugging: Print similarity matrix
-    st.write("Similarity Matrix:", similarity_matrix)
-
-    # Add nodes and filtered edges
-    for i, phrase_i in enumerate(key_phrases):
-        G.add_node(phrase_i, label=phrase_i, color="green")
-        similarity_scores = [
-            (key_phrases[j], similarity_matrix[i][j])
-            for j in range(len(key_phrases))
-            if i != j and phrase_to_source[phrase_i] != phrase_to_source[key_phrases[j]]
-        ]
-        # Sort by similarity and limit connections
-        sorted_scores = sorted(similarity_scores, key=lambda x: x[1], reverse=True)[:5]  # Increase connections to 5
-        for phrase_j, score in sorted_scores:
-            if score > 0.4:  # Lower threshold for better connections
-                G.add_edge(phrase_i, phrase_j)
+    # Add nodes and edges across different sources
+    for i, sentence_i in enumerate(content_sentences):
+        G.add_node(sentence_i, label=sentence_i[:50] + "...", color="green")  # Use first 50 characters as label
+        for j, sentence_j in enumerate(content_sentences):
+            if i != j and sentence_to_source[sentence_i] != sentence_to_source[sentence_j]:  # Different sources
+                if similarity_matrix[i][j] > 0.4:  # Lower threshold for better connections
+                    G.add_edge(sentence_i, sentence_j)
 
     # Visualize graph
     if len(G.nodes) > 0:

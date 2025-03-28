@@ -26,9 +26,10 @@ keybert_model = KeyBERT(model='all-MiniLM-L6-v2')
 if "knowledge_data.csv" not in os.listdir():
     pd.DataFrame(columns=["Source", "Content"]).to_csv("knowledge_data.csv", index=False)
 
+# Load existing data
 data = pd.read_csv("knowledge_data.csv")
 
-# Custom CSS for styling
+# Custom CSS for theming
 def add_custom_css():
     st.markdown(
         """
@@ -73,10 +74,12 @@ def add_custom_css():
         unsafe_allow_html=True
     )
 
+# Add CSS to the app
 add_custom_css()
 
 # Define the generate_knowledge_graph function
 def generate_knowledge_graph(data):
+    """Generate and return the knowledge graph."""
     G = nx.Graph()
     key_phrases = []
     phrase_to_source = {}
@@ -98,50 +101,67 @@ def generate_knowledge_graph(data):
         ]
         sorted_scores = sorted(similarity_scores, key=lambda x: x[1], reverse=True)[:5]
         for phrase_j, score in sorted_scores:
-            if score > 0.3:  # Lowered threshold slightly to include more edges
+            if score > 0.4:
                 G.add_edge(phrase_i, phrase_j)
 
     return G
 
 # Helper function to extract key phrases
 def extract_key_phrases(content, top_n=10):
+    """Extract key phrases using KeyBERT."""
     keywords = keybert_model.extract_keywords(content, keyphrase_ngram_range=(1, 2), stop_words="english", top_n=top_n)
     return [kw[0] for kw in keywords]
 
 # Generate insights from the graph and data
 def generate_insights(G, data):
+    """Generate meaningful insights from the graph and data."""
     insights = []
 
+    # Identify nodes with a decent number of links (degree centrality threshold)
     degree_centrality = nx.degree_centrality(G)
     avg_centrality = sum(degree_centrality.values()) / len(degree_centrality)
-    threshold = avg_centrality * 1.1  # Adjusted threshold to find a balance
+    threshold = avg_centrality * 1.5  # Adjusted threshold to focus on key nodes
 
     crux_nodes = [node for node, centrality in degree_centrality.items() if centrality >= threshold]
 
-    for crux_node in crux_nodes[:5]:  # Limit to top 5 crux nodes for better insights
+    for crux_node in crux_nodes[:3]:  # Limit to top 3 crux nodes
+        # Find neighbors and their sources
         neighbors = list(G.neighbors(crux_node))
-        sources = data.set_index("Source")["Content"].to_dict()
+        sources = data.set_index("Source")['Content'].to_dict()
         diverse_neighbors = [
             neighbor for neighbor in neighbors if sources.get(neighbor, None) != sources.get(crux_node, None)
         ]
 
+        # Include insights even if neighbors are not diverse
         neighbors_to_consider = diverse_neighbors if diverse_neighbors else neighbors
-        related_topics = ", ".join(neighbors_to_consider[:3])
+        related_topics = ", ".join(neighbors_to_consider[:2])  # Limit to 2 neighbors for clarity
 
         crux_context = data.loc[data["Content"].str.contains(crux_node, na=False, case=False), "Content"].head(1).values
-        context_text = crux_context[0] if len(crux_context) > 0 else f"No specific context for {crux_node}."
+        context_text = crux_context[0][:300] if len(crux_context) > 0 else f"No specific context for {crux_node}."
 
-        narrative = f"The concept '{crux_node}' highlights connections to themes such as {related_topics}. It is contextualized by: {context_text}"
+        # Generate a generalized insight
+        narrative = f"The concept '{crux_node}' highlights connections to themes such as {related_topics}. Contextual overview: {context_text}"
         insights.append(narrative)
 
+    # Fallback if no crux nodes identified
     if not insights:
         insights = ["No significant patterns or insights could be generated from the data."]
 
+    # Format insights
     return "\n\n".join(insights)
 
+# Streamlit App UI
 st.sidebar.title("")
-section = st.sidebar.radio("", ["Add Content", "Saved Content", "Generate Connections"], index=0, format_func=lambda x: x)
+if st.sidebar.button("Add Content"):
+    section = "Add Content"
+elif st.sidebar.button("Saved Content"):
+    section = "Saved Content"
+elif st.sidebar.button("Generate Connections"):
+    section = "Generate Connections"
+else:
+    section = "Add Content"
 
+# Add Content Section
 if section == "Add Content":
     st.title("Add New Content")
     input_type = st.radio("Choose input method:", ["Enter URL", "Upload File", "Enter Text"])
@@ -153,14 +173,14 @@ if section == "Add Content":
         url = st.text_input("Enter the URL (video, article, or other)")
         if st.button("Add Content from URL"):
             source = url
-            content = f"Extracted content from {url}"
+            content = f"Extracted content from {url}"  # Replace with real extraction logic
             st.success("Content added successfully!")
 
     elif input_type == "Upload File":
         uploaded_file = st.file_uploader("Upload a file", type=["txt", "pdf", "docx"])
         if uploaded_file:
             source = uploaded_file.name
-            content = f"Content from file: {uploaded_file.name}"
+            content = f"Content from file: {uploaded_file.name}"  # Replace with real file processing logic
             st.success("File uploaded and processed successfully!")
 
     elif input_type == "Enter Text":
@@ -175,34 +195,22 @@ if section == "Add Content":
         data = pd.concat([data, new_row], ignore_index=True)
         data.to_csv("knowledge_data.csv", index=False)
 
+# Saved Content Section
 elif section == "Saved Content":
     st.title("Saved Content")
     if not data.empty:
-        st.dataframe(data)
+        st.dataframe(data)  # Show saved data in an interactive table
     else:
         st.info("No content added yet!")
 
+# Generate Connections Section
 elif section == "Generate Connections":
     st.title("Generate Connections")
     if not data.empty:
         with st.spinner("Generating knowledge graph..."):
             G = generate_knowledge_graph(data)
 
+            # Display graph
             net = Network(height="700px", width="100%")
             net.from_nx(G)
             net.write_html("knowledge_graph.html")
-            try:
-                with open("knowledge_graph.html", "r") as f:
-                    st.components.v1.html(f.read(), height=700)
-            except FileNotFoundError:
-                st.error("Unable to render the graph.")
-
-        st.header("Graph Insights")
-        insights = generate_insights(G, data)
-        st.subheader("AI-Generated Insights:")
-        st.write(insights)
-    else:
-        st.warning("No data available to generate connections!")
-
-st.sidebar.markdown("---")
-st.sidebar.markdown("Built with ❤️ using Streamlit.")

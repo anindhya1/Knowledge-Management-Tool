@@ -26,9 +26,10 @@ keybert_model = KeyBERT(model='all-MiniLM-L6-v2')
 if "knowledge_data.csv" not in os.listdir():
     pd.DataFrame(columns=["Source", "Content"]).to_csv("knowledge_data.csv", index=False)
 
+# Load existing data
 data = pd.read_csv("knowledge_data.csv")
 
-# Custom CSS for styling
+# Custom CSS for theming
 def add_custom_css():
     st.markdown(
         """
@@ -73,10 +74,12 @@ def add_custom_css():
         unsafe_allow_html=True
     )
 
+# Add CSS to the app
 add_custom_css()
 
 # Define the generate_knowledge_graph function
 def generate_knowledge_graph(data):
+    """Generate and return the knowledge graph."""
     G = nx.Graph()
     key_phrases = []
     phrase_to_source = {}
@@ -89,6 +92,9 @@ def generate_knowledge_graph(data):
     embeddings = model.encode(key_phrases)
     similarity_matrix = cosine_similarity(embeddings)
 
+    # Increased similarity threshold to reduce noise
+    threshold = 0.5
+
     for i, phrase_i in enumerate(key_phrases):
         G.add_node(phrase_i, label=phrase_i, color="green")
         similarity_scores = [
@@ -96,52 +102,86 @@ def generate_knowledge_graph(data):
             for j in range(len(key_phrases))
             if i != j and phrase_to_source[phrase_i] != phrase_to_source[key_phrases[j]]
         ]
-        sorted_scores = sorted(similarity_scores, key=lambda x: x[1], reverse=True)[:5]
+        sorted_scores = sorted(similarity_scores, key=lambda x: x[1], reverse=True)[:3]  # Top 3 connections
         for phrase_j, score in sorted_scores:
-            if score > 0.3:  # Lowered threshold slightly to include more edges
+            if score > threshold:
                 G.add_edge(phrase_i, phrase_j)
 
     return G
 
 # Helper function to extract key phrases
 def extract_key_phrases(content, top_n=10):
+    """Extract key phrases using KeyBERT."""
     keywords = keybert_model.extract_keywords(content, keyphrase_ngram_range=(1, 2), stop_words="english", top_n=top_n)
     return [kw[0] for kw in keywords]
 
 # Generate insights from the graph and data
 def generate_insights(G, data):
+    """Generate meaningful and deeper insights by combining graph and transcript data."""
     insights = []
 
+    # Identify key nodes based on degree centrality
     degree_centrality = nx.degree_centrality(G)
     avg_centrality = sum(degree_centrality.values()) / len(degree_centrality)
-    threshold = avg_centrality * 1.1  # Adjusted threshold to find a balance
-
+    threshold = avg_centrality * 1.2  # Threshold for selecting key nodes
     crux_nodes = [node for node, centrality in degree_centrality.items() if centrality >= threshold]
 
-    for crux_node in crux_nodes[:5]:  # Limit to top 5 crux nodes for better insights
+    for crux_node in crux_nodes[:5]:  # Limit to top 5 key nodes
+        # Gather neighbors and context
         neighbors = list(G.neighbors(crux_node))
-        sources = data.set_index("Source")["Content"].to_dict()
-        diverse_neighbors = [
-            neighbor for neighbor in neighbors if sources.get(neighbor, None) != sources.get(crux_node, None)
-        ]
-
-        neighbors_to_consider = diverse_neighbors if diverse_neighbors else neighbors
-        related_topics = ", ".join(neighbors_to_consider[:3])
+        neighbor_summary = ", ".join(neighbors[:3]) if neighbors else "No direct connections"
 
         crux_context = data.loc[data["Content"].str.contains(crux_node, na=False, case=False), "Content"].head(1).values
-        context_text = crux_context[0] if len(crux_context) > 0 else f"No specific context for {crux_node}."
+        context_summary = (
+            crux_context[0][:500] + "..." if crux_context.size > 0 and len(crux_context[0]) > 500 else
+            crux_context[0] if crux_context.size > 0 else
+            "No specific context available."
+        )
 
-        narrative = f"The concept '{crux_node}' highlights connections to themes such as {related_topics}. It is contextualized by: {context_text}"
-        insights.append(narrative)
+        # Construct the LLM prompt
+        prompt = (
+            f"Concept: {crux_node}\n"
+            f"Connections: {neighbor_summary}\n"
+            f"Context: {context_summary}\n\n"
+            f"Generate a deep, meaningful, and insightful paragraph connecting the concept, connections, and context."
+        )
 
-    if not insights:
-        insights = ["No significant patterns or insights could be generated from the data."]
+        try:
+            # Generate insight using LLM
+            response = text_generator(prompt, max_new_tokens=150, num_return_sequences=1)[0]["generated_text"]
+            clean_response = response.strip()  # Clean up the response
+            if clean_response:
+                insights.append(clean_response)
+            else:
+                insights.append(f"No meaningful insight generated for '{crux_node}'.")
+        except Exception as e:
+            insights.append(f"Error generating insight for '{crux_node}': {e}")
+
+    # Handle cases with no valid insights
+    if not insights or all("Error generating insight" in insight for insight in insights):
+        insights = ["No meaningful insights could be generated from the data."]
 
     return "\n\n".join(insights)
 
-st.sidebar.title("")
-section = st.sidebar.radio("", ["Add Content", "Saved Content", "Generate Connections"], index=0, format_func=lambda x: x)
 
+# Streamlit App UI
+# Initialize session state for navigation
+if "section" not in st.session_state:
+    st.session_state.section = "Add Content"
+
+# Navigation bar
+st.sidebar.title("")
+if st.sidebar.button("Add Content"):
+    st.session_state.section = "Add Content"
+if st.sidebar.button("Saved Content"):
+    st.session_state.section = "Saved Content"
+if st.sidebar.button("Generate Connections"):
+    st.session_state.section = "Generate Connections"
+
+# Retrieve current section from session state
+section = st.session_state.section
+
+# Add Content Section
 if section == "Add Content":
     st.title("Add New Content")
     input_type = st.radio("Choose input method:", ["Enter URL", "Upload File", "Enter Text"])
@@ -153,14 +193,14 @@ if section == "Add Content":
         url = st.text_input("Enter the URL (video, article, or other)")
         if st.button("Add Content from URL"):
             source = url
-            content = f"Extracted content from {url}"
+            content = f"Extracted content from {url}"  # Replace with real extraction logic
             st.success("Content added successfully!")
 
     elif input_type == "Upload File":
         uploaded_file = st.file_uploader("Upload a file", type=["txt", "pdf", "docx"])
         if uploaded_file:
             source = uploaded_file.name
-            content = f"Content from file: {uploaded_file.name}"
+            content = f"Content from file: {uploaded_file.name}"  # Replace with real file processing logic
             st.success("File uploaded and processed successfully!")
 
     elif input_type == "Enter Text":
@@ -175,19 +215,22 @@ if section == "Add Content":
         data = pd.concat([data, new_row], ignore_index=True)
         data.to_csv("knowledge_data.csv", index=False)
 
+# Saved Content Section
 elif section == "Saved Content":
     st.title("Saved Content")
     if not data.empty:
-        st.dataframe(data)
+        st.dataframe(data)  # Show saved data in an interactive table
     else:
         st.info("No content added yet!")
 
+# Generate Connections Section
 elif section == "Generate Connections":
     st.title("Generate Connections")
     if not data.empty:
         with st.spinner("Generating knowledge graph..."):
             G = generate_knowledge_graph(data)
 
+            # Display graph
             net = Network(height="700px", width="100%")
             net.from_nx(G)
             net.write_html("knowledge_graph.html")
@@ -197,6 +240,7 @@ elif section == "Generate Connections":
             except FileNotFoundError:
                 st.error("Unable to render the graph.")
 
+        # Generate insights
         st.header("Graph Insights")
         insights = generate_insights(G, data)
         st.subheader("AI-Generated Insights:")
@@ -204,5 +248,6 @@ elif section == "Generate Connections":
     else:
         st.warning("No data available to generate connections!")
 
+# Footer
 st.sidebar.markdown("---")
-st.sidebar.markdown("Built with ❤️ using Streamlit.")
+st.sidebar.markdown("Built using Streamlit.")
