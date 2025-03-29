@@ -1,3 +1,9 @@
+"""
+Probably the version from the burger place
+"""
+
+
+
 import streamlit as st
 import pandas as pd
 import networkx as nx
@@ -14,6 +20,13 @@ from transformers import pipeline
 import PyPDF2
 from docx import Document
 import os
+import anthropic
+from transformers import pipeline
+
+# Initialize a local text-generation pipeline
+text_generator = pipeline("text-generation", model="gpt2")
+
+
 
 # NLP models
 model = SentenceTransformer('all-MiniLM-L6-v2')
@@ -61,60 +74,46 @@ def generate_knowledge_graph(data):
 
     return G
 
+
 def generate_meaningful_insights_locally(G, data):
-    """Generate meaningful and abstract insights using a local model."""
-    graph_summary = []
-
-    # Group key nodes and their neighbors into abstract relationships
+    """Generate abstracted and meaningful insights from graph data."""
+    # Step 1: Summarize the graph into abstract themes
+    themes = []
     degree_centrality = nx.degree_centrality(G)
-    most_connected_nodes = sorted(degree_centrality.items(), key=lambda x: x[1], reverse=True)[:5]
+    most_connected_nodes = sorted(degree_centrality.items(), key=lambda x: x[1], reverse=True)[:3]
 
-    if most_connected_nodes:
-        for node, _ in most_connected_nodes:
-            related_nodes = list(G.neighbors(node))
-            if related_nodes:
-                graph_summary.append(
-                    f"The idea '{node}' is strongly connected to related topics like {', '.join(related_nodes[:3])}, suggesting a shared focus on {node.lower()}."
-                )
-            else:
-                graph_summary.append(
-                    f"The idea '{node}' is central but does not have directly connected ideas."
-                )
+    for node, _ in most_connected_nodes:
+        related_nodes = list(G.neighbors(node))[:3]  # Limit to 3 connections
+        if related_nodes:
+            themes.append(f"'{node}' is closely connected to {', '.join(related_nodes)}, suggesting a shared focus.")
 
     # Summarize cluster themes
-    clusters = list(nx.connected_components(G))
-    if clusters:
-        cluster_themes = []
-        for idx, cluster in enumerate(clusters[:5]):  # Limit to top 5 clusters for simplicity
-            cluster_nodes = list(cluster)
-            cluster_themes.append(f"Cluster {idx + 1} focuses on topics such as {', '.join(cluster_nodes[:3])}.")
-        graph_summary.append(" ".join(cluster_themes))
+    clusters = list(nx.connected_components(G))[:3]  # Limit to top 3 clusters
+    cluster_themes = [f"Topics like {', '.join(list(cluster)[:3])} frequently appear together." for cluster in clusters]
 
-    # Include user-provided content context
-    content_contexts = []
-    for node in G.nodes():
-        matching_rows = data[data["Source"].str.contains(node, na=False, regex=False)]
-        if not matching_rows.empty:
-            content_contexts.append(
-                f"The idea '{node}' originates from the following content: {matching_rows['Content'].iloc[0][:200]}..."
-            )
-
-    # Combine abstracted graph insights and content contexts
-    narrative_prompt = (
-        "Based on the following patterns and contexts, generate meaningful insights:\n\n"
-        "Graph Patterns:\n" + "\n".join(graph_summary) + "\n\n"
-        "Content Context:\n" + "\n".join(content_contexts) + "\n\n"
-        "Please provide a concise and meaningful summary of the above relationships, avoiding technical terms like 'nodes' or 'clusters'. Focus on the shared themes and broader implications."
+    # Step 2: Build the abstraction-focused prompt
+    prompt = (
+        "Analyze the following themes and relationships. Highlight meaningful insights, unexpected connections, "
+        "and broader implications in a concise and human-readable manner:\n\n"
+        "Themes:\n" + "\n".join(themes) + "\n\n"
+        "Recurring Patterns:\n" + "\n".join(cluster_themes) + "\n\n"
+        "Focus on providing insights that help the user learn something new."
     )
 
-    # Generate abstract insights locally using GPT-2
+    # Step 3: Generate insights using the local model
     generated_text = text_generator(
-        narrative_prompt,
-        max_new_tokens=150,  # Limit to concise output
-        num_return_sequences=1
+        prompt,
+        max_new_tokens=150,  # Generate up to 150 new tokens
+        num_return_sequences=1,
     )[0]["generated_text"]
 
-    return generated_text
+    # Step 4: Post-process insights
+    insights = generated_text.strip()
+    return insights
+
+
+
+
 
 
 

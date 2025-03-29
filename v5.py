@@ -14,6 +14,13 @@ from transformers import pipeline
 import PyPDF2
 from docx import Document
 import os
+import anthropic
+from transformers import pipeline
+
+# Initialize a local text-generation pipeline
+text_generator = pipeline("text-generation", model="gpt2")
+
+
 
 # NLP models
 model = SentenceTransformer('all-MiniLM-L6-v2')
@@ -61,60 +68,63 @@ def generate_knowledge_graph(data):
 
     return G
 
+
 def generate_meaningful_insights_locally(G, data):
-    """Generate meaningful and abstract insights using a local model."""
-    graph_summary = []
-
-    # Group key nodes and their neighbors into abstract relationships
+    """Generate meaningful insights structured under contextual headings."""
+    # Step 1: Extract key themes and connections
+    central_themes = []
     degree_centrality = nx.degree_centrality(G)
-    most_connected_nodes = sorted(degree_centrality.items(), key=lambda x: x[1], reverse=True)[:5]
+    most_connected_nodes = sorted(degree_centrality.items(), key=lambda x: x[1], reverse=True)[:3]
 
-    if most_connected_nodes:
-        for node, _ in most_connected_nodes:
-            related_nodes = list(G.neighbors(node))
-            if related_nodes:
-                graph_summary.append(
-                    f"The idea '{node}' is strongly connected to related topics like {', '.join(related_nodes[:3])}, suggesting a shared focus on {node.lower()}."
-                )
-            else:
-                graph_summary.append(
-                    f"The idea '{node}' is central but does not have directly connected ideas."
-                )
-
-    # Summarize cluster themes
-    clusters = list(nx.connected_components(G))
-    if clusters:
-        cluster_themes = []
-        for idx, cluster in enumerate(clusters[:5]):  # Limit to top 5 clusters for simplicity
-            cluster_nodes = list(cluster)
-            cluster_themes.append(f"Cluster {idx + 1} focuses on topics such as {', '.join(cluster_nodes[:3])}.")
-        graph_summary.append(" ".join(cluster_themes))
-
-    # Include user-provided content context
-    content_contexts = []
-    for node in G.nodes():
-        matching_rows = data[data["Source"].str.contains(node, na=False, regex=False)]
-        if not matching_rows.empty:
-            content_contexts.append(
-                f"The idea '{node}' originates from the following content: {matching_rows['Content'].iloc[0][:200]}..."
+    for node, _ in most_connected_nodes:
+        related_nodes = list(G.neighbors(node))[:3]  # Limit to 3 connections
+        if related_nodes:
+            central_themes.append(
+                f"'{node}' connects to {', '.join(related_nodes)}."
             )
 
-    # Combine abstracted graph insights and content contexts
-    narrative_prompt = (
-        "Based on the following patterns and contexts, generate meaningful insights:\n\n"
-        "Graph Patterns:\n" + "\n".join(graph_summary) + "\n\n"
-        "Content Context:\n" + "\n".join(content_contexts) + "\n\n"
-        "Please provide a concise and meaningful summary of the above relationships, avoiding technical terms like 'nodes' or 'clusters'. Focus on the shared themes and broader implications."
+    # Summarize cluster patterns
+    cluster_patterns = []
+    clusters = list(nx.connected_components(G))[:3]  # Limit to top 3 clusters
+    for idx, cluster in enumerate(clusters):
+        cluster_patterns.append(f"Topics like {', '.join(list(cluster)[:3])} frequently co-occur.")
+
+    # Step 2: Build a simplified and focused prompt
+    prompt = (
+        "Generate meaningful insights from the following themes and patterns. For each theme, provide a heading followed by bullet-point insights. "
+        "Focus on hidden connections, broader implications, and lessons learned.\n\n"
+        f"Themes:\n{'; '.join(central_themes)}\n\n"
+        f"Patterns:\n{'; '.join(cluster_patterns)}\n\n"
     )
 
-    # Generate abstract insights locally using GPT-2
+    # Step 3: Generate insights using the text generator
     generated_text = text_generator(
-        narrative_prompt,
-        max_new_tokens=150,  # Limit to concise output
-        num_return_sequences=1
+        prompt,
+        max_new_tokens=300,  # Generate up to 300 tokens
+        num_return_sequences=1,
     )[0]["generated_text"]
 
-    return generated_text
+    # Step 4: Post-process and structure insights
+    insights = post_process_insights(generated_text)
+    return insights
+
+
+def post_process_insights(text):
+    """Post-process the generated text to structure it into headings and bullet points."""
+    lines = text.split("\n")
+    structured_insights = []
+    current_heading = ""
+
+    for line in lines:
+        if ":" in line:  # Treat lines with ':' as headings
+            current_heading = line.strip()
+            structured_insights.append(f"### {current_heading}")
+        elif line.strip():  # Treat other lines as bullet points
+            structured_insights.append(f"- {line.strip()}")
+
+    return "\n".join(structured_insights)
+
+
 
 
 

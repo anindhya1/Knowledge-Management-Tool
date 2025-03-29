@@ -1,3 +1,12 @@
+"""
+pull insights based on those nodes that have the most edges and the nodes that are connected to such nodes.
+Nodes with most edges probably act like a centroid.
+
+along with the fact that we are using nodes that have the most edges, how about generating insights from the nodes
+that are connected to the nodes of different sources as well?
+"""
+
+
 import streamlit as st
 import pandas as pd
 import networkx as nx
@@ -14,6 +23,13 @@ from transformers import pipeline
 import PyPDF2
 from docx import Document
 import os
+import anthropic
+from transformers import pipeline
+
+# Initialize a local text-generation pipeline
+text_generator = pipeline("text-generation", model="gpt2")
+
+
 
 # NLP models
 model = SentenceTransformer('all-MiniLM-L6-v2')
@@ -56,65 +72,95 @@ def generate_knowledge_graph(data):
         ]
         sorted_scores = sorted(similarity_scores, key=lambda x: x[1], reverse=True)[:5]
         for phrase_j, score in sorted_scores:
-            if score > 0.4:
+            if score > 0.3:
                 G.add_edge(phrase_i, phrase_j)
 
     return G
 
+
 def generate_meaningful_insights_locally(G, data):
-    """Generate meaningful and abstract insights using a local model."""
-    graph_summary = []
-
-    # Group key nodes and their neighbors into abstract relationships
+    """Generate meaningful insights centered on nodes with the most neighbors and diverse-source connections."""
+    # Step 1: Identify nodes with the most neighbors (high degree centrality)
     degree_centrality = nx.degree_centrality(G)
-    most_connected_nodes = sorted(degree_centrality.items(), key=lambda x: x[1], reverse=True)[:5]
+    sorted_nodes = sorted(degree_centrality.items(), key=lambda x: x[1], reverse=True)
 
-    if most_connected_nodes:
-        for node, _ in most_connected_nodes:
-            related_nodes = list(G.neighbors(node))
-            if related_nodes:
-                graph_summary.append(
-                    f"The idea '{node}' is strongly connected to related topics like {', '.join(related_nodes[:3])}, suggesting a shared focus on {node.lower()}."
-                )
-            else:
-                graph_summary.append(
-                    f"The idea '{node}' is central but does not have directly connected ideas."
-                )
+    # Step 2: Filter nodes with neighbors from different sources
+    insights_data = []
+    sources = data.set_index("Source")["Content"].to_dict()  # Map source to content for quick lookup
 
-    # Summarize cluster themes
-    clusters = list(nx.connected_components(G))
-    if clusters:
-        cluster_themes = []
-        for idx, cluster in enumerate(clusters[:5]):  # Limit to top 5 clusters for simplicity
-            cluster_nodes = list(cluster)
-            cluster_themes.append(f"Cluster {idx + 1} focuses on topics such as {', '.join(cluster_nodes[:3])}.")
-        graph_summary.append(" ".join(cluster_themes))
+    for node, _ in sorted_nodes:
+        neighbors = list(G.neighbors(node))
 
-    # Include user-provided content context
-    content_contexts = []
-    for node in G.nodes():
-        matching_rows = data[data["Source"].str.contains(node, na=False, regex=False)]
-        if not matching_rows.empty:
-            content_contexts.append(
-                f"The idea '{node}' originates from the following content: {matching_rows['Content'].iloc[0][:200]}..."
-            )
+        # Identify neighbors from diverse sources
+        node_source = sources.get(node, None)
+        diverse_neighbors = [
+            neighbor for neighbor in neighbors if sources.get(neighbor, None) != node_source
+        ]
 
-    # Combine abstracted graph insights and content contexts
-    narrative_prompt = (
-        "Based on the following patterns and contexts, generate meaningful insights:\n\n"
-        "Graph Patterns:\n" + "\n".join(graph_summary) + "\n\n"
-        "Content Context:\n" + "\n".join(content_contexts) + "\n\n"
-        "Please provide a concise and meaningful summary of the above relationships, avoiding technical terms like 'nodes' or 'clusters'. Focus on the shared themes and broader implications."
-    )
+        # Fallback to all neighbors if no diverse neighbors found
+        if not diverse_neighbors:
+            diverse_neighbors = neighbors
 
-    # Generate abstract insights locally using GPT-2
-    generated_text = text_generator(
-        narrative_prompt,
-        max_new_tokens=150,  # Limit to concise output
-        num_return_sequences=1
-    )[0]["generated_text"]
+        # Extract context for the node
+        source_context = data.loc[data["Content"].str.contains(node, na=False, case=False), "Content"].head(1).values
+        node_context = source_context[0] if len(source_context) > 0 else f"Insights related to '{node}'."
 
-    return generated_text
+        # Extract context for neighbors
+        neighbor_contexts = [
+            data.loc[data["Content"].str.contains(neighbor, na=False, case=False), "Content"].head(1).values
+            for neighbor in diverse_neighbors[:3]  # Limit to 3 diverse neighbors
+        ]
+        diverse_context = " ".join(
+            [ctx[0] if len(ctx) > 0 else f"Related topic: {neighbor}" for ctx, neighbor in zip(neighbor_contexts, diverse_neighbors)]
+        )
+
+        insights_data.append({"context": node_context, "diverse_context": diverse_context})
+
+        # Limit to top 3 nodes for simplicity
+        if len(insights_data) >= 3:
+            break
+
+    # If no nodes meet criteria, provide fallback
+    if not insights_data:
+        insights_data = [{"context": "No meaningful nodes identified.", "diverse_context": "No relevant connections found."}]
+
+    # Step 3: Build the LLM prompt
+    insights_prompts = []
+    for item in insights_data:
+        context = item["context"]
+        diverse_context = item["diverse_context"]
+        insights_prompts.append(f"Context: {context}. Related Topics: {diverse_context}.")
+
+    prompt = "\n\n".join(insights_prompts)
+    if len(prompt) > 500:  # Truncate if too long
+        prompt = prompt[:500]
+
+    # Step 4: Generate insights using the text generator
+    try:
+        generated_text = text_generator(
+            prompt,
+            max_new_tokens=300,  # Generate up to 300 tokens
+            num_return_sequences=1,
+        )[0]["generated_text"]
+    except Exception as e:
+        generated_text = f"Error during insight generation: {e}"
+
+    # Step 5: Format the insights
+    insights = post_process_paragraphs(generated_text, insights_data)
+    return insights
+
+
+def post_process_paragraphs(text, insights_data):
+    """Post-process the generated text into clean paragraphs with contextual headings."""
+    lines = text.split("\n")
+    paragraphs = []
+    for idx, item in enumerate(insights_data):
+        heading = f"### {item['context']}"
+        paragraph = lines[idx].strip() if idx < len(lines) else "No additional insights generated."
+        paragraphs.append(f"{heading}\n\n{paragraph}")
+    return "\n\n".join(paragraphs)
+
+
 
 
 
