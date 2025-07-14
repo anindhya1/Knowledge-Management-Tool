@@ -90,6 +90,9 @@ def generate_knowledge_graph(data):
         key_phrases.extend(phrases)
         phrase_to_source.update({phrase: row["Source"] for phrase in phrases})
 
+    print(key_phrases)
+    print("Length of key_phrases", len(key_phrases))
+
     embeddings = model.encode(key_phrases)
     similarity_matrix = cosine_similarity(embeddings)
 
@@ -112,62 +115,57 @@ def generate_knowledge_graph(data):
 
 
 # Helper function to extract key phrases
-def extract_key_phrases(content, top_n=10):
+# top_n is a variable that dictates how many relevant key phrases should it return
+def extract_key_phrases(content, top_n=50):
     """Extract key phrases using KeyBERT."""
     keywords = keybert_model.extract_keywords(content, keyphrase_ngram_range=(1, 2), stop_words="english", top_n=top_n)
     return [kw[0] for kw in keywords]
 
 # Generate insights from the graph and data
-# Generate insights from the graph and data
 def generate_insights(G, data):
-    """Generate concise and meaningful insights using Hugging Face LLM."""
+    """Generate concise, meaningful, and insightful paragraphs using LLM with transcript context."""
     insights = []
+    max_new_tokens = 200  # Adjusted to ensure detailed LLM responses
 
     # Identify key nodes based on degree centrality
     degree_centrality = nx.degree_centrality(G)
     avg_centrality = sum(degree_centrality.values()) / len(degree_centrality)
-    threshold = avg_centrality * 1.2  # Adjust threshold for meaningful crux nodes
+    threshold = avg_centrality * 1.2  # Threshold for selecting key nodes
     crux_nodes = [node for node, centrality in degree_centrality.items() if centrality >= threshold]
 
-    for crux_node in crux_nodes[:5]:  # Limit to top 5 nodes
-        # Get neighbors and summarize their relationships
+    for crux_node in crux_nodes[:5]:  # Limit to top 5 key nodes
+        # Gather neighbors and summarize their relationships
         neighbors = list(G.neighbors(crux_node))
-        neighbor_summary = ", ".join(neighbors[:3])  # Summarize up to 3 neighbors for brevity
+        neighbor_summary = ", ".join(neighbors[:3]) if neighbors else "No direct connections"
 
-        # Extract context for the crux node
+        # Extract detailed context for the crux node from the transcripts or content
         crux_context = data.loc[data["Content"].str.contains(crux_node, na=False, case=False), "Content"].head(1).values
-        if crux_context.size > 0:  # Explicit check for non-empty array
-            if len(crux_context[0]) > 300:
-                context_summary = crux_context[0][:300] + "..."
-            else:
-                context_summary = crux_context[0]
-        else:
-            context_summary = "No specific context available."
-
-        # Construct prompt for LLM
-        prompt = (
-            f"Concept: {crux_node}\n"
-            f"Connected Themes: {neighbor_summary}\n"
-            f"Context: {context_summary}\n\n"
-            f"Generate a concise and meaningful insight based on this information."
+        context_summary = (
+            crux_context[0] if crux_context.size > 0 else "No specific context available."
         )
 
-        # Generate insight using the LLM
-        try:
-            llm_response = text_generator(prompt, max_length=100, num_return_sequences=1)[0]["generated_text"]
-            insights.append(llm_response.strip())  # Append only the insight
-        except Exception as e:
-            insights.append(f"Error generating insight for {crux_node}: {e}")
+        # Construct the LLM prompt
+        prompt = (
+            f"You are an AI tasked with generating insightful observations.\n\n"
+            f"Focus concept: {crux_node}\n"
+            f"Related themes: {neighbor_summary}\n"
+            f"Context: {context_summary}\n\n"
+            f"Provide a concise and meaningful insight based on the above."
+        )
 
-    # Fallback if no insights are generated
-    if not insights:
-        insights = ["No significant insights could be generated from the data."]
+        try:
+            # Generate insight using LLM
+            response = text_generator(prompt, max_new_tokens=max_new_tokens, num_return_sequences=1)[0]["generated_text"]
+            clean_response = response.strip()  # Remove any unnecessary formatting or text
+            insights.append(clean_response)
+        except Exception as e:
+            insights.append(f"Error generating insight for '{crux_node}': {e}")
+
+    # Handle cases with no valid insights
+    if not insights or all("Error generating insight" in insight for insight in insights):
+        insights = ["No meaningful insights could be generated from the data."]
 
     return "\n\n".join(insights)
-
-
-
-
 
 
 
