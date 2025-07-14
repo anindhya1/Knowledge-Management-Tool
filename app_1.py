@@ -77,102 +77,61 @@ def add_custom_css():
 # Add CSS to the app
 add_custom_css()
 
-# Define the generate_knowledge_graph function
-# Define the generate_knowledge_graph function
-def generate_knowledge_graph(data):
-    """Generate and return the knowledge graph."""
+# Context-based graph generator
+
+def generate_context_graph(data, threshold=0.6):
     G = nx.Graph()
-    key_phrases = []
-    phrase_to_source = {}
 
-    for index, row in data.iterrows():
-        phrases = extract_key_phrases(row["Content"], top_n=10)
-        key_phrases.extend(phrases)
-        phrase_to_source.update({phrase: row["Source"] for phrase in phrases})
+    contexts = data["Content"].fillna("").tolist()
+    sources = data["Source"].fillna("Unknown").tolist()
 
-    print(key_phrases)
-    print("Length of key_phrases", len(key_phrases))
+    embeddings = model.encode(contexts)
+    sim_matrix = cosine_similarity(embeddings)
 
-    embeddings = model.encode(key_phrases)
-    similarity_matrix = cosine_similarity(embeddings)
+    for i, text in enumerate(contexts):
+        G.add_node(i,
+                   label=f"Context {i+1}",
+                   title=f"<b>Source:</b> {sources[i]}<br><b>Preview:</b> {text[:200]}...",
+                   group="Context",
+                   color="teal")
 
-    # Increased similarity threshold to reduce noise
-    threshold = 0.5
-
-    for i, phrase_i in enumerate(key_phrases):
-        G.add_node(phrase_i, label=phrase_i, color="green")
-        similarity_scores = [
-            (key_phrases[j], similarity_matrix[i][j])
-            for j in range(len(key_phrases))
-            if i != j and phrase_to_source[phrase_i] != phrase_to_source[key_phrases[j]]
-        ]
-        sorted_scores = sorted(similarity_scores, key=lambda x: x[1], reverse=True)[:3]  # Top 3 connections
-        for phrase_j, score in sorted_scores:
-            if score > threshold:
-                G.add_edge(phrase_i, phrase_j)
+    for i in range(len(contexts)):
+        for j in range(i + 1, len(contexts)):
+            if sim_matrix[i][j] > threshold:
+                G.add_edge(i, j, weight=float(sim_matrix[i][j]))
 
     return G
 
+# Generate insights from context graph
 
-# Helper function to extract key phrases
-# top_n is a variable that dictates how many relevant key phrases should it return
-def extract_key_phrases(content, top_n=50):
-    """Extract key phrases using KeyBERT."""
-    keywords = keybert_model.extract_keywords(content, keyphrase_ngram_range=(1, 2), stop_words="english", top_n=top_n)
-    return [kw[0] for kw in keywords]
-
-# Generate insights from the graph and data
 def generate_insights(G, data):
-    """Generate concise, meaningful, and insightful paragraphs using LLM with transcript context."""
     insights = []
-    max_new_tokens = 200  # Adjusted to ensure detailed LLM responses
+    max_new_tokens = 200
 
-    # Identify key nodes based on degree centrality
-    degree_centrality = nx.degree_centrality(G)
-    avg_centrality = sum(degree_centrality.values()) / len(degree_centrality)
-    threshold = avg_centrality * 1.2  # Threshold for selecting key nodes
-    crux_nodes = [node for node, centrality in degree_centrality.items() if centrality >= threshold]
+    for node in list(G.nodes)[:5]:
+        neighbors = list(G.neighbors(node))
+        neighbor_indices = ", ".join([f"Context {n+1}" for n in neighbors])
 
-    for crux_node in crux_nodes[:5]:  # Limit to top 5 key nodes
-        # Gather neighbors and summarize their relationships
-        neighbors = list(G.neighbors(crux_node))
-        neighbor_summary = ", ".join(neighbors[:3]) if neighbors else "No direct connections"
+        context_text = data.iloc[node]["Content"]
+        source_text = data.iloc[node]["Source"]
 
-        # Extract detailed context for the crux node from the transcripts or content
-        crux_context = data.loc[data["Content"].str.contains(crux_node, na=False, case=False), "Content"].head(1).values
-        context_summary = (
-            crux_context[0] if crux_context.size > 0 else "No specific context available."
-        )
-
-        # Construct the LLM prompt
         prompt = (
-            f"You are an AI tasked with generating insightful observations.\n\n"
-            f"Focus concept: {crux_node}\n"
-            f"Related themes: {neighbor_summary}\n"
-            f"Context: {context_summary}\n\n"
-            f"Provide a concise and meaningful insight based on the above."
+            f"You are an AI tasked with generating insightful observations from a user’s knowledge graph.\n\n"
+            f"Focus context (Context {node+1}):\n{context_text[:300]}...\n\n"
+            f"Related to: {neighbor_indices if neighbor_indices else 'No direct context links'}\n\n"
+            f"Source: {source_text}\n\n"
+            f"Give a meaningful insight or interpretation."
         )
 
         try:
-            # Generate insight using LLM
             response = text_generator(prompt, max_new_tokens=max_new_tokens, num_return_sequences=1)[0]["generated_text"]
-            clean_response = response.strip()  # Remove any unnecessary formatting or text
-            insights.append(clean_response)
+            insights.append(response.strip())
         except Exception as e:
-            insights.append(f"Error generating insight for '{crux_node}': {e}")
-
-    # Handle cases with no valid insights
-    if not insights or all("Error generating insight" in insight for insight in insights):
-        insights = ["No meaningful insights could be generated from the data."]
+            insights.append(f"Error generating insight: {e}")
 
     return "\n\n".join(insights)
 
-
-
-
-
 # Streamlit App UI
-# Initialize session state for navigation
 if "section" not in st.session_state:
     st.session_state.section = "Add Content"
 
@@ -185,9 +144,7 @@ if st.sidebar.button("Saved Content"):
 if st.sidebar.button("Generate Connections"):
     st.session_state.section = "Generate Connections"
 
-# Retrieve current section from session state
 section = st.session_state.section
-
 
 # Add Content Section
 if section == "Add Content":
@@ -201,14 +158,14 @@ if section == "Add Content":
         url = st.text_input("Enter the URL (video, article, or other)")
         if st.button("Add Content from URL"):
             source = url
-            content = f"Extracted content from {url}"  # Replace with real extraction logic
+            content = f"Extracted content from {url}"
             st.success("Content added successfully!")
 
     elif input_type == "Upload File":
         uploaded_file = st.file_uploader("Upload a file", type=["txt", "pdf", "docx"])
         if uploaded_file:
             source = uploaded_file.name
-            content = f"Content from file: {uploaded_file.name}"  # Replace with real file processing logic
+            content = f"Content from file: {uploaded_file.name}"
             st.success("File uploaded and processed successfully!")
 
     elif input_type == "Enter Text":
@@ -226,29 +183,48 @@ if section == "Add Content":
 # Saved Content Section
 elif section == "Saved Content":
     st.title("Saved Content")
+
     if not data.empty:
-        st.dataframe(data)  # Show saved data in an interactive table
+        for idx, row in data.iterrows():
+            with st.container():
+                cols = st.columns([5, 5, 1])
+                cols[0].markdown(f"**Title:** {row.get('Title', 'No Title')}")
+                cols[1].markdown(f"**Source:** {row.get('Source', 'Unknown')}")
+                delete_button_key = f"delete_{idx}"
+
+                if cols[2].button("🗑️", key=delete_button_key):
+                    st.session_state[f"confirm_delete_{idx}"] = True
+
+            # Confirm deletion section
+            if st.session_state.get(f"confirm_delete_{idx}", False):
+                st.warning(f"Are you sure you want to delete '{row.get('Title', 'this item')}'?")
+                confirm_cols = st.columns([1, 1])
+                if confirm_cols[0].button("Yes", key=f"confirm_yes_{idx}"):
+                    data = data.drop(index=idx).reset_index(drop=True)
+                    data.to_csv("knowledge_data.csv", index=False)
+                    st.success(f"Deleted '{row.get('Title', 'item')}'")
+                    st.rerun()
+                if confirm_cols[1].button("No", key=f"confirm_no_{idx}"):
+                    st.session_state[f"confirm_delete_{idx}"] = False
     else:
         st.info("No content added yet!")
+
 
 # Generate Connections Section
 elif section == "Generate Connections":
     st.title("Generate Connections")
     if not data.empty:
-        with st.spinner("Generating knowledge graph..."):
-            G = generate_knowledge_graph(data)
-
-            # Display graph
+        with st.spinner("Generating context graph..."):
+            G = generate_context_graph(data)
             net = Network(height="700px", width="100%")
             net.from_nx(G)
-            net.write_html("knowledge_graph.html")
+            net.write_html("context_graph.html")
             try:
-                with open("knowledge_graph.html", "r") as f:
+                with open("context_graph.html", "r") as f:
                     st.components.v1.html(f.read(), height=700)
             except FileNotFoundError:
                 st.error("Unable to render the graph.")
 
-        # Generate insights
         st.header("Graph Insights")
         insights = generate_insights(G, data)
         st.subheader("AI-Generated Insights:")
