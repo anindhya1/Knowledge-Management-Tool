@@ -105,4 +105,4 @@ This project is licensed under the MIT License. See the LICENSE file for details
 
 ---
 
-Built with ❤️ using cutting-edge machine learning and NLP technologies.
+Built using cutting-edge machine learning and NLP technologies.
