@@ -14,9 +14,11 @@ from transformers import pipeline
 import PyPDF2
 from docx import Document
 import os
+import requests
+import json
 
 # Initialize a local text-generation pipeline
-text_generator = pipeline("text-generation", model="gpt2")
+# text_generator = pipeline("text-generation", model="gpt2")
 
 # NLP models
 model = SentenceTransformer('all-MiniLM-L6-v2')
@@ -121,6 +123,34 @@ def extract_key_phrases(content, top_n=50):
     keywords = keybert_model.extract_keywords(content, keyphrase_ngram_range=(1, 2), stop_words="english", top_n=top_n)
     return [kw[0] for kw in keywords]
 
+
+def generate_insight_mistral(prompt):
+    response = requests.post(
+        "http://localhost:11434/api/generate",
+        json={
+            "model": "mistral",
+            "prompt": prompt,
+            "stream": True,
+            "num_predict": 400,  # Use this instead of max_tokens
+            "temperature": 0.7
+        },
+        stream=True
+    )
+
+    output = ""
+    try:
+        for line in response.iter_lines():
+            if line:
+                line_data = json.loads(line.decode("utf-8"))
+                if "response" in line_data:
+                    output += line_data["response"]
+    except Exception as e:
+        output = f"Error: {e}"
+    return output.strip()
+
+
+
+
 # Generate insights from the graph and data
 def generate_insights(G, data):
     """Generate concise, meaningful, and insightful paragraphs using LLM with transcript context."""
@@ -146,16 +176,25 @@ def generate_insights(G, data):
 
         # Construct the LLM prompt
         prompt = (
-            f"You are an AI tasked with generating insightful observations.\n\n"
-            f"Focus concept: {crux_node}\n"
-            f"Related themes: {neighbor_summary}\n"
-            f"Context: {context_summary}\n\n"
-            f"Provide a concise and meaningful insight based on the above."
+            "You are a research analyst generating strategic insights from cross-domain knowledge.\n\n"
+            f"Main Topic: \"{crux_node}\"\n"
+            f"Related Themes: {neighbor_summary}\n\n"
+            "Context:\n"
+            f"\"\"\"\n{context_summary}\n\"\"\"\n\n"
+            "Based on the above, write a concise, original insight that draws a meaningful connection between the topic and its themes. "
+            "Avoid stating the obvious, and highlight a non-trivial pattern or implication.\n\n"
+            "Keep the insight within 3–5 sentences."
         )
+
+        print("Length of prompt: ", len(prompt))
 
         try:
             # Generate insight using LLM
-            response = text_generator(prompt, max_new_tokens=max_new_tokens, num_return_sequences=1)[0]["generated_text"]
+            print("=== PROMPT ===")
+            print(prompt)
+            print("==============")
+
+            response = generate_insight_mistral(prompt)
             clean_response = response.strip()  # Remove any unnecessary formatting or text
             insights.append(clean_response)
         except Exception as e:
