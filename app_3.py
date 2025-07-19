@@ -10,19 +10,20 @@ from bs4 import BeautifulSoup
 from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
 from keybert import KeyBERT
-from transformers import pipeline
+from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM
 import PyPDF2
 from docx import Document
 import os
 import requests
 import json
+import torch
 
 # Initialize a local text-generation pipeline
 # text_generator = pipeline("text-generation", model="gpt2")
 
 # NLP models
 model = SentenceTransformer('all-MiniLM-L6-v2')
-keybert_model = KeyBERT(model='all-MiniLM-L6-v2')
+# keybert_model = KeyBERT(model='all-MiniLM-L6-v2')
 
 # Initialize data storage
 if "knowledge_data.csv" not in os.listdir():
@@ -79,49 +80,76 @@ def add_custom_css():
 # Add CSS to the app
 add_custom_css()
 
-# Define the generate_knowledge_graph function
-# Define the generate_knowledge_graph function
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+import torch
+
+# Load REBEL model
+@st.cache_resource
+def load_rebel_model():
+    tokenizer = AutoTokenizer.from_pretrained("Babelscape/rebel-large")
+    model = AutoModelForSeq2SeqLM.from_pretrained("Babelscape/rebel-large")
+    return tokenizer, model
+
+tokenizer, model = load_rebel_model()
+
+# Parse REBEL output
+def parse_rebel_output(text):
+    triples = []
+    split_text = text.split("<triplet>")
+    for chunk in split_text:
+        if "<subj>" in chunk and "<rel>" in chunk and "<obj>" in chunk:
+            try:
+                subj = chunk.split("<subj>")[1].split("<rel>")[0].strip()
+                rel = chunk.split("<rel>")[1].split("<obj>")[0].strip()
+                obj = chunk.split("<obj>")[1].strip()
+                triples.append((subj, rel, obj))
+            except:
+                continue
+    return triples
+
+# Extract triples from text
+def extract_triples(text):
+    inputs = tokenizer([text], return_tensors="pt", truncation=True)
+    with torch.no_grad():
+        outputs = model.generate(**inputs, max_length=512)
+    decoded = tokenizer.batch_decode(outputs, skip_special_tokens=True)[0]
+    return parse_rebel_output(decoded)
+
+
 def generate_knowledge_graph(data):
-    """Generate and return the knowledge graph."""
-    G = nx.Graph()
-    key_phrases = []
-    phrase_to_source = {}
+    G = nx.MultiDiGraph()
+    alias_map = {}
 
     for index, row in data.iterrows():
-        phrases = extract_key_phrases(row["Content"], top_n=10)
-        key_phrases.extend(phrases)
-        phrase_to_source.update({phrase: row["Source"] for phrase in phrases})
+        triples = extract_triples(row["Content"])
+        print(f"Extracting from row {index}: {row['Content'][:100]}")
+        print(f"Triples: {triples}")
 
-    print(key_phrases)
-    print("Length of key_phrases", len(key_phrases))
+        for subj, rel, obj in triples:
+            subj_key = subj.lower().strip()
+            obj_key = obj.lower().strip()
 
-    embeddings = model.encode(key_phrases)
-    similarity_matrix = cosine_similarity(embeddings)
+            # Basic alias resolution (you can make this more advanced later)
+            for key in [subj_key, obj_key]:
+                if key not in alias_map:
+                    alias_map[key] = {key}
+            canonical_subj = max(alias_map[subj_key], key=len)
+            canonical_obj = max(alias_map[obj_key], key=len)
 
-    # Increased similarity threshold to reduce noise
-    threshold = 0.5
-
-    for i, phrase_i in enumerate(key_phrases):
-        G.add_node(phrase_i, label=phrase_i, color="#008080")
-        similarity_scores = [
-            (key_phrases[j], similarity_matrix[i][j])
-            for j in range(len(key_phrases))
-            if i != j and phrase_to_source[phrase_i] != phrase_to_source[key_phrases[j]]
-        ]
-        sorted_scores = sorted(similarity_scores, key=lambda x: x[1], reverse=True)[:3]  # Top 3 connections
-        for phrase_j, score in sorted_scores:
-            if score > threshold:
-                G.add_edge(phrase_i, phrase_j)
+            G.add_node(canonical_subj, label=canonical_subj)
+            G.add_node(canonical_obj, label=canonical_obj)
+            G.add_edge(canonical_subj, canonical_obj, label=rel)
 
     return G
 
 
+
 # Helper function to extract key phrases
 # top_n is a variable that dictates how many relevant key phrases should it return
-def extract_key_phrases(content, top_n=50):
-    """Extract key phrases using KeyBERT."""
-    keywords = keybert_model.extract_keywords(content, keyphrase_ngram_range=(1, 2), stop_words="english", top_n=top_n)
-    return [kw[0] for kw in keywords]
+# def extract_key_phrases(content, top_n=50):
+#     """Extract key phrases using KeyBERT."""
+#     keywords = keybert_model.extract_keywords(content, keyphrase_ngram_range=(1, 2), stop_words="english", top_n=top_n)
+#     return [kw[0] for kw in keywords]
 
 
 def generate_insight_mistral(prompt):
@@ -156,6 +184,9 @@ def generate_insights(G, data):
     """Generate concise, meaningful, and insightful paragraphs using LLM with transcript context."""
     insights = []
     max_new_tokens = 200  # Adjusted to ensure detailed LLM responses
+
+    if G.number_of_nodes() == 0:
+        return "No data connections found in the knowledge graph."
 
     # Identify key nodes based on degree centrality
     degree_centrality = nx.degree_centrality(G)
@@ -279,7 +310,11 @@ elif section == "Generate Connections":
 
             # Display graph
             net = Network(height="700px", width="100%")
-            net.from_nx(G)
+            for u, v, data_edge in G.edges(data=True):
+                net.add_node(u, label=u)
+                net.add_node(v, label=v)
+                net.add_edge(u, v, title=data_edge.get("label", ""), label=data_edge.get("label", ""))
+
             net.write_html("knowledge_graph.html")
             try:
                 with open("knowledge_graph.html", "r") as f:
