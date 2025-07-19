@@ -17,8 +17,8 @@ import os
 import requests
 import json
 import torch
-from nltk.tokenize import sent_tokenize
 import nltk
+from nltk.tokenize import sent_tokenize
 import networkx as nx
 
 # Initialize a local text-generation pipeline
