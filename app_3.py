@@ -17,6 +17,9 @@ import os
 import requests
 import json
 import torch
+from nltk.tokenize import sent_tokenize
+import nltk
+import networkx as nx
 
 # Initialize a local text-generation pipeline
 # text_generator = pipeline("text-generation", model="gpt2")
@@ -117,31 +120,40 @@ def extract_triples(text):
 
 
 def generate_knowledge_graph(data):
+
     G = nx.MultiDiGraph()
     alias_map = {}
 
     for index, row in data.iterrows():
-        triples = extract_triples(row["Content"])
-        print(f"Extracting from row {index}: {row['Content'][:100]}")
-        print(f"Triples: {triples}")
+        content = row["Content"]
+        sentences = sent_tokenize(content)
 
-        for subj, rel, obj in triples:
-            subj_key = subj.lower().strip()
-            obj_key = obj.lower().strip()
+        for sentence in sentences:
+            if len(sentence.split()) < 5:
+                continue  # Skip short/unstructured sentences
 
-            # Basic alias resolution (you can make this more advanced later)
-            for key in [subj_key, obj_key]:
-                if key not in alias_map:
-                    alias_map[key] = {key}
-            canonical_subj = max(alias_map[subj_key], key=len)
-            canonical_obj = max(alias_map[obj_key], key=len)
+            triples = extract_triples(sentence)
 
-            G.add_node(canonical_subj, label=canonical_subj)
-            G.add_node(canonical_obj, label=canonical_obj)
-            G.add_edge(canonical_subj, canonical_obj, label=rel)
+            print(f"Sentence: {sentence}")
+            print(f"Triples: {triples}")
+
+            for subj, rel, obj in triples:
+                subj_key = subj.lower().strip()
+                obj_key = obj.lower().strip()
+
+                # Basic alias mapping
+                for key in [subj_key, obj_key]:
+                    if key not in alias_map:
+                        alias_map[key] = {key}
+
+                canonical_subj = max(alias_map[subj_key], key=len)
+                canonical_obj = max(alias_map[obj_key], key=len)
+
+                G.add_node(canonical_subj, label=canonical_subj)
+                G.add_node(canonical_obj, label=canonical_obj)
+                G.add_edge(canonical_subj, canonical_obj, label=rel)
 
     return G
-
 
 
 # Helper function to extract key phrases
