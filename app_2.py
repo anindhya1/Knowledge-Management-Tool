@@ -1,3 +1,5 @@
+# Here we are aliasing and making connections based on the underlying key_phrases of the alias nodes.
+
 import streamlit as st
 import pandas as pd
 import networkx as nx

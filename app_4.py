@@ -1,4 +1,4 @@
-# This is the REBEL version, built on the logic of app_2.
+# In the current code we are not aliasing encodings
 
 import streamlit as st
 import pandas as pd
@@ -12,37 +12,20 @@ from bs4 import BeautifulSoup
 from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
 from keybert import KeyBERT
-from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM
+from transformers import pipeline
 import PyPDF2
 from docx import Document
 from sklearn.cluster import DBSCAN
-from collections import defaultdict
 import os
-import re
 import requests
-from spacy.lang.en import English
-import spacy
 import json
-import nltk
-from nltk import sent_tokenize
-nltk.download('punkt')
-
 
 # Initialize a local text-generation pipeline
 # text_generator = pipeline("text-generation", model="gpt2")
 
-"""Loading Models"""
-
 # NLP models
 model = SentenceTransformer('all-MiniLM-L6-v2')
 keybert_model = KeyBERT(model='all-MiniLM-L6-v2')
-
-# Load REBEL model
-rebel_tokenizer = AutoTokenizer.from_pretrained("Babelscape/rebel-large")
-rebel_model = AutoModelForSeq2SeqLM.from_pretrained("Babelscape/rebel-large")
-
-# Load spaCy NER
-nlp = spacy.load("en_core_web_sm")
 
 # Initialize data storage
 if "knowledge_data.csv" not in os.listdir():
@@ -100,21 +83,7 @@ def add_custom_css():
 add_custom_css()
 
 
-def compute_alias_similarity(alias1, alias2, alias_to_phrases, phrase_to_idx, similarity_matrix):
-    phrases1 = alias_to_phrases[alias1]
-    phrases2 = alias_to_phrases[alias2]
-
-    scores = [
-        similarity_matrix[phrase_to_idx[p1]][phrase_to_idx[p2]]
-        for p1 in phrases1
-        for p2 in phrases2
-        if p1 != p2
-    ]
-
-    return max(scores) if scores else 0
-
-
-def alias_key_phrases(phrases, eps=0.4, min_samples=1):
+def alias_key_phrases(phrases, eps=0.1, min_samples=1):
     """
     Cluster semantically similar phrases and return a mapping: original -> alias
     """
@@ -139,106 +108,48 @@ def alias_key_phrases(phrases, eps=0.4, min_samples=1):
     return phrase_to_alias
 
 
-
-def extract_triplets_with_rebel(text, tokenizer, model, max_input_tokens=512):
-    inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=max_input_tokens)
-    outputs = model.generate(**inputs, max_length=512)
-    decoded = tokenizer.batch_decode(outputs, skip_special_tokens=True)[0]
-
-    print(f"\n[REBEL Output] {decoded}\n")
-
-    tokens = decoded.strip().split()
-
-    # Sliding window extraction (subject, object, relation) or (subject, relation, object)
-    triplets = []
-    i = 0
-    while i + 2 < len(tokens):
-        subj = tokens[i]
-        rel = tokens[i + 1]
-        obj = tokens[i + 2]
-
-        # Heuristic: avoid junk triples, check that these aren't just stopwords or repeated words
-        if all(len(tok.strip()) > 2 for tok in [subj, rel, obj]):
-            triplets.append((subj, rel, obj))
-
-        i += 3
-
-    return triplets
-
-
-
+# Define the generate_knowledge_graph function
 # Define the generate_knowledge_graph function
 def generate_knowledge_graph(data):
-    """Generate knowledge graph using alias-based similarity + REBEL triplets."""
+    """Generate and return the knowledge graph."""
     G = nx.Graph()
     key_phrases = []
     phrase_to_source = {}
 
-    # Step 1: Extract key phrases
     for index, row in data.iterrows():
-        phrases = extract_key_phrases(row["Content"], top_n=30)
+        phrases = extract_key_phrases(row["Content"], top_n=100)
         key_phrases.extend(phrases)
         phrase_to_source.update({phrase: row["Source"] for phrase in phrases})
 
-    # Step 2: Alias key phrases
+    # Step: Semantic aliasing
     phrase_to_alias = alias_key_phrases(key_phrases)
+
+    # Deduplicate by alias
     aliased_phrases = list(set(phrase_to_alias.values()))
 
-    # Step 3: Map aliases to original phrases
-    alias_to_phrases = defaultdict(list)
-    for phrase in key_phrases:
-        alias = phrase_to_alias[phrase]
-        alias_to_phrases[alias].append(phrase)
 
-    # Step 4: Compute similarity matrix of raw key phrases
+    print(key_phrases)
+    print("Length of key_phrases", len(key_phrases))
+    print("Aliasing mapping (sample):", dict(list(phrase_to_alias.items())[:10]))
+
     embeddings = model.encode(key_phrases)
     similarity_matrix = cosine_similarity(embeddings)
-    phrase_to_idx = {phrase: idx for idx, phrase in enumerate(key_phrases)}
 
-    # Step 5: Add alias nodes
-    for alias in aliased_phrases:
-        G.add_node(alias, label=alias, color="#008080")
-
-    # Step 6: Add edges between aliases based on similarity of underlying key phrases
+    # Increased similarity threshold to reduce noise
     threshold = 0.5
-    for i, alias_i in enumerate(aliased_phrases):
-        similarity_scores = []
-        for j, alias_j in enumerate(aliased_phrases):
-            if i == j:
-                continue
-            sim_score = compute_alias_similarity(alias_i, alias_j, alias_to_phrases, phrase_to_idx, similarity_matrix)
-            similarity_scores.append((alias_j, sim_score))
 
-        for alias_j, score in sorted(similarity_scores, key=lambda x: x[1], reverse=True)[:3]:
+    for i, phrase_i in enumerate(aliased_phrases):
+        G.add_node(phrase_i, label=phrase_i, color="#008080")
+        similarity_scores = [
+            (phrase_to_alias[key_phrases[j]], similarity_matrix[i][j])
+            for j in range(len(key_phrases))
+            if i != j and phrase_to_source.get(phrase_i) != phrase_to_source.get(key_phrases[j])
+        ]
+
+        sorted_scores = sorted(similarity_scores, key=lambda x: x[1], reverse=True)[:3]  # Top 3 connections
+        for phrase_j, score in sorted_scores:
             if score > threshold:
-                G.add_edge(alias_i, alias_j, label="semantic_sim")
-
-    # Step 7: Extract REBEL triplets from context sentences
-    alias_contexts = defaultdict(list)
-    for alias in aliased_phrases:
-        for _, row in data.iterrows():
-            if alias.lower() in row["Content"].lower():
-                sentences = sent_tokenize(row["Content"])
-                for sentence in sentences:
-                    if alias.lower() in sentence.lower():
-                        alias_contexts[alias].append(sentence)
-
-    triplets = set()
-    for alias, sentences in alias_contexts.items():
-        for sentence in sentences[:7]:
-            try:
-                triplets.update(extract_triplets_with_rebel(sentence, rebel_tokenizer, rebel_model))
-                print(triplets)
-            except Exception as e:
-                print(f"REBEL failed on: {sentence[:80]}...")
-
-
-    # Step 8: Add triplet nodes + edges
-    for subj, rel, obj in triplets:
-        G.add_node(subj, label=subj, color="#FF8C00")
-        G.add_node(obj, label=obj, color="#FF8C00")
-        G.add_edge(subj, obj, label=rel)
-        print(f"REBEL triplet added: ({subj}, {rel}, {obj})")
+                G.add_edge(phrase_i, phrase_j)
 
     return G
 
@@ -318,7 +229,7 @@ def generate_insights(G, data):
         try:
             # Generate insight using LLM
             print("=== PROMPT ===")
-            # print(prompt)
+            print(prompt)
             print("==============")
 
             response = generate_insight_mistral(prompt)
