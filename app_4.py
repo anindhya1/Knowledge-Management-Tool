@@ -1,4 +1,5 @@
-# In the current code we are not aliasing encodings
+# In the current code we are not aliasing encodings. This allows for more interlinked connections thus boosting the
+# generation of deeper insights.
 
 import streamlit as st
 import pandas as pd
