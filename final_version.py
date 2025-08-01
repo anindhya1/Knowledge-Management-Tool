@@ -31,17 +31,39 @@ import sys
 def load_spacy_model():
     try:
         import spacy
-        nlp = spacy.load("en_core_web_sm")
-        # Increase the maximum text length limit
-        nlp.max_length = 2000000  # 2 million characters
-        return nlp
+
+        # Try to load the model
+        try:
+            nlp = spacy.load("en_core_web_sm")
+            nlp.max_length = 2000000
+            return nlp
+        except OSError:
+            # If model not found, try to download it
+            try:
+                st.info("Installing spaCy English model...")
+                subprocess.run([
+                    sys.executable, "-m", "pip", "install",
+                    "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.2/en_core_web_sm-3.7.2-py3-none-any.whl"
+                ], check=True, capture_output=True)
+
+                nlp = spacy.load("en_core_web_sm")
+                nlp.max_length = 2000000
+                return nlp
+            except Exception as install_error:
+                st.warning(f"Could not install spaCy model: {install_error}")
+                return None
+
     except Exception as e:
-        st.error(f"Error loading spaCy model: {e}")
-        st.info("Some NLP features will be limited.")
+        st.error(f"Error with spaCy: {e}")
         return None
+
 
 # Load the model
 nlp = load_spacy_model()
+
+# If spaCy fails completely, we can still use basic text processing
+if nlp is None:
+    st.warning("spaCy unavailable - some features will be limited but app will still work")
 
 # NLP models
 model = SentenceTransformer('all-MiniLM-L6-v2')
