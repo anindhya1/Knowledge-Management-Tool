@@ -3,7 +3,7 @@ pandas
 networkx
 pyvis
 youtube-transcript-api
-newspaper3k
+newspaper3k==0.2.8
 requests
 beautifulsoup4
 scikit-learn
@@ -14,6 +14,5 @@ PyPDF2
 python-docx
 spacy
 nltk
-lxml==4.9.3
-newspaper3k==0.2.8
-
+lxml>=4.6.0
+lxml-html-clean
