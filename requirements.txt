@@ -12,7 +12,6 @@ keybert
 transformers
 PyPDF2
 python-docx
-spacy==3.7.2
+spacy
 nltk
 lxml>=4.6.0
-lxml-html-clean

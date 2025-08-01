@@ -26,32 +26,15 @@ import subprocess
 import sys
 
 
-@st.cache_resource
-def load_spacy_model():
-    try:
-        import spacy
-        try:
-            nlp = spacy.load("en_core_web_sm")
-        except OSError:
-            # Download the model if it's not available
-            st.info("Downloading spaCy English model... This may take a moment.")
-            subprocess.check_call([sys.executable, "-m", "spacy", "download", "en_core_web_sm"])
-            nlp = spacy.load("en_core_web_sm")
-
-        # Increase the maximum text length limit
-        nlp.max_length = 2000000  # 2 million characters
-        return nlp
-    except Exception as e:
-        st.error(f"Error loading spaCy model: {e}")
-        st.info("Some NLP features will be limited.")
-        return None
-
-
-# Use this instead of your current spaCy loading code
+# Load spaCy model for NLP processing
 try:
-    nlp = load_spacy_model()
-except Exception:
-    nlp = None
+    nlp = spacy.load("en_core_web_sm")
+    # Increase the maximum text length limit
+    nlp.max_length = 2000000  # 2 million characters
+except OSError:
+    st.error("Please install spaCy English model: python -m spacy download en_core_web_sm")
+    st.stop()
+
 
 # NLP models
 model = SentenceTransformer('all-MiniLM-L6-v2')
