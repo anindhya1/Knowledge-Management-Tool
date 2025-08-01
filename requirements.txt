@@ -1,0 +1,16 @@
+streamlit
+pandas
+networkx
+pyvis
+youtube-transcript-api
+newspaper3k
+requests
+beautifulsoup4
+scikit-learn
+sentence-transformers
+keybert
+transformers
+PyPDF2
+python-docx
+spacy
+nltk

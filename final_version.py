@@ -556,7 +556,7 @@ def generate_semantic_insights(G, data):
                 f"- {t['subject']} → {t['predicate']} → {t['object']}"
                 for t in high_conf_triplets
             ])
-
+            print(triplet_text)
             prompt = f"""You are my personal assistant examining knowledge relationships. Analyze these high-confidence 
             triplets and provide concise strategic insights about the underlying patterns, themes, or implications.
 
@@ -564,10 +564,12 @@ Knowledge Relationships:
 {triplet_text}
 
 Focus on:
-1. What are some of deeper insights you gather from the various contexts I added.
+1. What are some of the deeper insights you gather from the various contexts I added.
 2. Is there an underlying semantic logic to why I'm consuming this content? If there is, what are some actions I can 
 take to boost those motives?
-3. Further are there any deeper links, comparisons or relations you can make here?
+3. Further are there any deeper links, comparisons or relations you can make here which I otherwise might have missed out on?
+If so, please explain what they are and why. Try to make interlinked connections between the contexts you pull from the 
+Subjects, Predicates and Objects present in triplet_text.
 
 Provide your analysis in 2-3 clear, actionable paragraphs."""
 
@@ -617,12 +619,11 @@ if "section" not in st.session_state:
     st.session_state.section = "Add Content"
 
 # Navigation bar
-st.sidebar.title("Semantic Knowledge Graph")
 if st.sidebar.button("Add Content", key="nav_add_content"):
     st.session_state.section = "Add Content"
 if st.sidebar.button("Saved Content", key="nav_saved_content"):
     st.session_state.section = "Saved Content"
-if st.sidebar.button("Generate Semantic Graph", key="nav_generate_graph"):
+if st.sidebar.button("Generate Connections", key="nav_generate_graph"):
     st.session_state.section = "Generate Semantic Graph"
 
 section = st.session_state.section
@@ -774,57 +775,57 @@ elif section == "Generate Semantic Graph":
                     insights = generate_semantic_insights(G, data)
                     st.write(insights)
 
-                    # Show sample semantic triplets
-                    if st.checkbox("Show Sample Semantic Triplets", key="show_semantic_triplets"):
-                        sample_triplets = G.graph.get('triplets', [])[:20]
-                        st.subheader("Sample Extracted Semantic Triplets")
+                    # # Show sample semantic triplets
+                    # if st.checkbox("Show Sample Semantic Triplets", key="show_semantic_triplets"):
+                    #     sample_triplets = G.graph.get('triplets', [])[:20]
+                    #     st.subheader("Sample Extracted Semantic Triplets")
+                    #
+                    #     for i, triplet in enumerate(sample_triplets, 1):
+                    #         confidence = triplet.get('confidence', 0.5)
+                    #         relation_type = triplet.get('relation_type', 'other')
+                    #         subject_type = triplet.get('subject_type', 'OTHER')
+                    #         object_type = triplet.get('object_type', 'OTHER')
+                    #
+                    #         confidence_indicator = "High" if confidence > 0.7 else "Med" if confidence > 0.5 else "Low"
+                    #
+                    #         st.write(
+                    #             f"{i}. [{confidence_indicator}] **{triplet['subject']}** ({subject_type}) "
+                    #             f"→ *{triplet['predicate']}* ({relation_type}) → "
+                    #             f"**{triplet['object']}** ({object_type}) "
+                    #             f"[{confidence:.2f}]"
+                    #         )
 
-                        for i, triplet in enumerate(sample_triplets, 1):
-                            confidence = triplet.get('confidence', 0.5)
-                            relation_type = triplet.get('relation_type', 'other')
-                            subject_type = triplet.get('subject_type', 'OTHER')
-                            object_type = triplet.get('object_type', 'OTHER')
-
-                            confidence_indicator = "High" if confidence > 0.7 else "Med" if confidence > 0.5 else "Low"
-
-                            st.write(
-                                f"{i}. [{confidence_indicator}] **{triplet['subject']}** ({subject_type}) "
-                                f"→ *{triplet['predicate']}* ({relation_type}) → "
-                                f"**{triplet['object']}** ({object_type}) "
-                                f"[{confidence:.2f}]"
-                            )
-
-                    # Export options
-                    if st.checkbox("Export Graph Data", key="export_data"):
-                        st.subheader("Export Options")
-
-                        col1, col2 = st.columns(2)
-
-                        with col1:
-                            # Export triplets as CSV
-                            triplets_df = pd.DataFrame(G.graph.get('triplets', []))
-                            if not triplets_df.empty:
-                                csv_data = triplets_df.to_csv(index=False)
-                                st.download_button(
-                                    label="Download Triplets as CSV",
-                                    data=csv_data,
-                                    file_name="semantic_triplets.csv",
-                                    mime="text/csv"
-                                )
-
-                        with col2:
-                            # Export graph as JSON
-                            import json
-                            from networkx.readwrite import json_graph
-
-                            graph_data = json_graph.node_link_data(G)
-                            json_data = json.dumps(graph_data, indent=2)
-                            st.download_button(
-                                label="Download Graph as JSON",
-                                data=json_data,
-                                file_name="semantic_graph.json",
-                                mime="application/json"
-                            )
+                    # # Export options
+                    # if st.checkbox("Export Graph Data", key="export_data"):
+                    #     st.subheader("Export Options")
+                    #
+                    #     col1, col2 = st.columns(2)
+                    #
+                    #     with col1:
+                    #         # Export triplets as CSV
+                    #         triplets_df = pd.DataFrame(G.graph.get('triplets', []))
+                    #         if not triplets_df.empty:
+                    #             csv_data = triplets_df.to_csv(index=False)
+                    #             st.download_button(
+                    #                 label="Download Triplets as CSV",
+                    #                 data=csv_data,
+                    #                 file_name="semantic_triplets.csv",
+                    #                 mime="text/csv"
+                    #             )
+                    #
+                    #     with col2:
+                    #         # Export graph as JSON
+                    #         import json
+                    #         from networkx.readwrite import json_graph
+                    #
+                    #         graph_data = json_graph.node_link_data(G)
+                    #         json_data = json.dumps(graph_data, indent=2)
+                    #         st.download_button(
+                    #             label="Download Graph as JSON",
+                    #             data=json_data,
+                    #             file_name="semantic_graph.json",
+                    #             mime="application/json"
+                    #         )
                 else:
                     st.warning("No meaningful semantic relationships could be extracted from the content.")
                     st.info("Try adjusting the confidence threshold or adding more detailed content.")
@@ -833,11 +834,4 @@ elif section == "Generate Semantic Graph":
         st.info("Please add some content first using the 'Add Content' section.")
 
 # Footer
-st.sidebar.markdown("---")
-st.sidebar.markdown("**Semantic Knowledge Graph**")
-st.sidebar.markdown("Built with advanced NLP")
-st.sidebar.markdown("**Features:**")
-st.sidebar.markdown("• Entity type classification")
-st.sidebar.markdown("• Relationship categorization")
-st.sidebar.markdown("• Confidence scoring")
-st.sidebar.markdown("• Interactive visualization")
+st.sidebar.markdown("Built using Streamlit")
