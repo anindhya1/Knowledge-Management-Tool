@@ -38,13 +38,9 @@ from collections import defaultdict, Counter
 import numpy as np
 
 # Load spaCy model for NLP processing
-try:
-    nlp = spacy.load("en_core_web_sm")
-    # Increase the maximum text length limit
-    nlp.max_length = 2000000  # 2 million characters
-except OSError:
-    st.error("Please install spaCy English model: python -m spacy download en_core_web_sm")
-    st.stop()
+nlp = spacy.load("en_core_web_sm")
+# Increase the maximum text length limit
+nlp.max_length = 2000000  # 2 million characters
 
 # NLP models
 model = SentenceTransformer('all-MiniLM-L6-v2')
@@ -57,40 +53,34 @@ if "knowledge_data.csv" not in os.listdir():
 # Load existing data
 @st.cache_data
 def load_data():
-    try:
-        data = pd.read_csv("knowledge_data.csv")
-        # Ensure all required columns exist
-        required_cols = ["Title", "Source", "Content"]
-        for col in required_cols:
-            if col not in data.columns:
-                data[col] = ""
-        return data
-    except:
-        return pd.DataFrame(columns=["Title", "Source", "Content"])
+    data = pd.read_csv("knowledge_data.csv")
+    # Ensure all required columns exist
+    required_cols = ["Title", "Source", "Content"]
+    for col in required_cols:
+        if col not in data.columns:
+            data[col] = ""
+    return data
 
 
 def save_data(new_entry):
     """Save new entry to CSV and clear cache"""
-    try:
-        # Load current data
-        current_data = pd.read_csv("knowledge_data.csv")
+    # Load current data
+    current_data = pd.read_csv("knowledge_data.csv")
 
-        # Add new entry
-        new_row = pd.DataFrame([new_entry])
-        updated_data = pd.concat([current_data, new_row], ignore_index=True)
+    # Add new entry
+    new_row = pd.DataFrame([new_entry])
+    updated_data = pd.concat([current_data, new_row], ignore_index=True)
 
-        # Save to CSV
-        updated_data.to_csv("knowledge_data.csv", index=False)
+    # Save to CSV
+    updated_data.to_csv("knowledge_data.csv", index=False)
 
-        # Clear the cache so data reloads
-        load_data.clear()
+    # Clear the cache so data reloads
+    load_data.clear()
 
-        return True
-    except Exception as e:
-        st.error(f"Error saving data: {e}")
-        return False
+    return True
 
-# Categories for entities and relations
+
+# Categories for entities and relations (Creating manually, for now)
 ENTITY_TYPES = {
     'PERSON': {'color': '#FF6B6B', 'size': 25},
     'ORG': {'color': '#4ECDC4', 'size': 25},
@@ -163,56 +153,45 @@ add_custom_css()
 
 def extract_video_id(url):
     """Extract video ID from various YouTube URL formats"""
-    try:
-        if "youtu.be/" in url:
-            video_id = url.split("youtu.be/")[-1].split("?")[0].split("&")[0]
-        elif "youtube.com/watch" in url:
-            from urllib.parse import parse_qs
-            parsed_url = urlparse(url)
-            query_params = parse_qs(parsed_url.query)
-            video_id = query_params.get('v', [None])[0]
-        elif "youtube.com/embed/" in url:
-            video_id = url.split("embed/")[-1].split("?")[0]
-        else:
-            video_id_match = re.search(r'[?&]v=([^&]+)', url)
-            video_id = video_id_match.group(1) if video_id_match else None
 
-        if video_id:
-            video_id = re.sub(r'[^a-zA-Z0-9_-].*', '', video_id)
+    if "youtu.be/" in url:
+        video_id = url.split("youtu.be/")[-1].split("?")[0].split("&")[0]
+    elif "youtube.com/watch" in url:
+        from urllib.parse import parse_qs
+        parsed_url = urlparse(url)
+        query_params = parse_qs(parsed_url.query)
+        video_id = query_params.get('v', [None])[0]
+    elif "youtube.com/embed/" in url:
+        video_id = url.split("embed/")[-1].split("?")[0]
+    else:
+        video_id_match = re.search(r'[?&]v=([^&]+)', url)
+        video_id = video_id_match.group(1) if video_id_match else None
 
-        return video_id if video_id and len(video_id) == 11 else None
-    except Exception as e:
-        st.error(f"Error extracting video ID: {e}")
-        return None
+    if video_id:
+        video_id = re.sub(r'[^a-zA-Z0-9_-].*', '', video_id)
+
+    return video_id if video_id and len(video_id) == 11 else None
 
 
 def get_youtube_transcript(video_id, title):
     """Extract transcript from YouTube video - simplified approach"""
-    try:
-        st.info(f"Extracting transcript for video ID: {video_id}")
+    st.info(f"Extracting transcript for video ID: {video_id}")
 
-        # Simple direct approach - this works for most videos
-        transcript_data = YouTubeTranscriptApi.get_transcript(video_id)
+    # Simple direct approach - this works for most videos
+    transcript_data = YouTubeTranscriptApi.get_transcript(video_id)
 
-        # Combine all transcript text
-        transcript_text = " ".join([entry['text'] for entry in transcript_data])
+    # Combine all transcript text
+    transcript_text = " ".join([entry['text'] for entry in transcript_data])
 
-        # Clean up the text
-        transcript_text = re.sub(r'\s+', ' ', transcript_text).strip()
+    # Clean up the text
+    transcript_text = re.sub(r'\s+', ' ', transcript_text).strip()
 
-        # Format for CSV
-        content = f"YouTube Video: {title}\n\nTranscript:\n{transcript_text}"
-        content = content.replace('"', "'")  # Escape quotes for CSV
+    # Format for CSV
+    content = f"YouTube Video: {title}\n\nTranscript:\n{transcript_text}"
+    content = content.replace('"', "'")  # Escape quotes for CSV
 
-        st.success(f"Successfully extracted transcript ({len(transcript_text)} characters)")
-        return content
-
-    except Exception as e:
-        st.warning(f"Could not extract transcript: {str(e)}")
-        # Return placeholder content
-        content = f"YouTube Video: {title}\n\nURL: https://youtube.com/watch?v={video_id}\n\nNote: Transcript not available - {str(e)}"
-        return content
-
+    st.success(f"Successfully extracted transcript ({len(transcript_text)} characters)")
+    return content
 
 
 def classify_entity_type(entity_text, doc=None):
@@ -667,45 +646,35 @@ Subjects, Predicates and Objects present in triplet_text.
 
 Provide your analysis in 2-3 clear, actionable paragraphs."""
 
-            try:
-                llm_insight = generate_insight_mistral(prompt)
-                insights.append(f"Strategic Analysis:\n{llm_insight}")
-            except Exception as e:
-                insights.append(f"Strategic Analysis: Could not generate LLM insights - {str(e)}")
+            llm_insight = generate_insight_mistral(prompt)
+            insights.append(f"Strategic Analysis:\n{llm_insight}")
+
 
     return "\n\n".join(insights) if insights else "No semantic insights could be generated."
 
 
 def generate_insight_mistral(prompt):
     """Generate insights using Mistral through Ollama API."""
-    try:
-        response = requests.post(
-            "http://localhost:11434/api/generate",
-            json={
-                "model": "mistral",
-                "prompt": prompt,
-                "stream": False,  # Set to False for simpler handling
-                "options": {
-                    "num_predict": 400,
-                    "temperature": 0.7,
-                    "top_p": 0.9
-                }
-            },
-            timeout=1200
-        )
+    response = requests.post(
+        "http://localhost:11434/api/generate",
+        json={
+            "model": "mistral",
+            "prompt": prompt,
+            "stream": False,  # Set to False for simpler handling
+            "options": {
+                "num_predict": 400,
+                "temperature": 0.7,
+                "top_p": 0.9
+            }
+        },
+        timeout=1200
+    )
 
-        if response.status_code == 200:
-            result = response.json()
-            return result.get("response", "No response generated").strip()
-        else:
-            return f"Error: HTTP {response.status_code}"
-
-    except requests.exceptions.ConnectionError:
-        return "Error: Could not connect to Ollama. Please ensure Ollama is running and Mistral model is available."
-    except requests.exceptions.Timeout:
-        return "Error: Request timed out. The model may be processing a large request."
-    except Exception as e:
-        return f"Error: {str(e)}"
+    if response.status_code == 200:
+        result = response.json()
+        return result.get("response", "No response generated").strip()
+    else:
+        return f"Error: HTTP {response.status_code}"
 
 
 # Streamlit App UI
