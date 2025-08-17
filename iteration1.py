@@ -1,9 +1,7 @@
 """
-This the second iteration of the project 'ALCMEAON'. Here we are using KEYBERT to break text into key phrases. But this
-time we add the idea of aliasing. This helps us merge those nodes that basically mean the same thing. That way we have
- more disparate phrases when we go to select key phrases. Again, a certain number of top n phrases are then chosen,
- to maintain high degree of relevance. The phrases are then converted into embeddings and using cosine similarities,
-under a certain threshold value, connection are made between the these phrases.
+This the first iteration of the project 'ALCMEAON'. Here we are using KEYBERT to break text into key phrases. A certain
+number of top n phrases are then chosen, to maintain high degree of relevance. The phrases are then converted into
+embeddings and using cosine similarities, under a certain threshold value, connection are made between the these phrases.
 This is then represented as a knowledge graph. The key phrases are treated as nodes, and those nodes that are connected
 are represented as edges.
 Now, having created a wide number of node-edge pairs, there would be some nodes that will have more connections than
@@ -16,41 +14,43 @@ a prompt. This helps the LLM know where to lay focus, considering what is being 
 - Spervised by Thomas J. Borrelli
 - Rochester Institute of Technology
 """
-import streamlit as st
+
 import pandas as pd
-import networkx as nx
 from pyvis.network import Network
+from sklearn.metrics.pairwise import cosine_similarity
 from youtube_transcript_api import YouTubeTranscriptApi
 from newspaper import Article
 from urllib.parse import urlparse
 import requests
 from bs4 import BeautifulSoup
-from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
 from keybert import KeyBERT
 from transformers import pipeline
 import PyPDF2
 from docx import Document
-from sklearn.cluster import DBSCAN
-from collections import defaultdict
+import networkx as nx
 import os
 import requests
 import json
+import streamlit as st
 
 
 # NLP models
 model = SentenceTransformer('all-MiniLM-L6-v2')
 keybert_model = KeyBERT(model='all-MiniLM-L6-v2')
 
-# Initialize csv file
+# Initialize data storage
 if "knowledge_data.csv" not in os.listdir():
     pd.DataFrame(columns=["Source", "Content"]).to_csv("knowledge_data.csv", index=False)
 
 # Load existing data
 data = pd.read_csv("knowledge_data.csv")
 
-# Custom CSS for theming
+
 def add_custom_css():
+    """
+    To maintain a decent UX, frontend is directly being integrated here.
+    """
     st.markdown(
         """
         <style>
@@ -97,98 +97,42 @@ def add_custom_css():
 # Add CSS to the app
 add_custom_css()
 
-
-def compute_alias_similarity(alias1, alias2, alias_to_phrases, phrase_to_idx, similarity_matrix):
-    """Aliasing helps declutter the graph, by combining similar nodes. That way we make sure """
-    phrases1 = alias_to_phrases[alias1]
-    phrases2 = alias_to_phrases[alias2]
-
-    scores = [
-        similarity_matrix[phrase_to_idx[p1]][phrase_to_idx[p2]]
-        for p1 in phrases1
-        for p2 in phrases2
-        if p1 != p2
-    ]
-
-    return max(scores) if scores else 0
-
-
-def alias_key_phrases(phrases, eps=0.2, min_samples=1):
-    """Cluster semantically similar phrases and return a mapping: original -> alias"""
-    embeddings = model.encode(phrases)
-    clustering = DBSCAN(eps=eps, min_samples=min_samples, metric="cosine").fit(embeddings)
-
-    labels = clustering.labels_
-    phrase_to_alias = {}
-    label_to_group = {}
-
-    for label, phrase in zip(labels, phrases):
-        if label not in label_to_group:
-            label_to_group[label] = []
-        label_to_group[label].append(phrase)
-
-    for label, group in label_to_group.items():
-        # Choose shortest phrase as canonical alias
-        alias = min(group, key=len)
-        for phrase in group:
-            phrase_to_alias[phrase] = alias
-
-    return phrase_to_alias
-
-
 # Define the generate_knowledge_graph function
 def generate_knowledge_graph(data):
-    """Generate and return the knowledge graph using alias nodes based on key phrase similarity."""
+    """Generate and return the knowledge graph."""
     G = nx.Graph()
     key_phrases = []
     phrase_to_source = {}
 
     for index, row in data.iterrows():
-        phrases = extract_key_phrases(row["Content"], top_n=30)  # You can adjust top_n here
+        phrases = extract_key_phrases(row["Content"], top_n=10)
         key_phrases.extend(phrases)
         phrase_to_source.update({phrase: row["Source"] for phrase in phrases})
 
-    # Step 1: Semantic aliasing
-    phrase_to_alias = alias_key_phrases(key_phrases)
-    aliased_phrases = list(set(phrase_to_alias.values()))
-
-    # Step 2: Map aliases to original phrases
-    alias_to_phrases = defaultdict(list)
-    for phrase in key_phrases:
-        alias = phrase_to_alias[phrase]
-        alias_to_phrases[alias].append(phrase)
-
-    # Step 3: Compute similarity between original key phrases
     embeddings = model.encode(key_phrases)
     similarity_matrix = cosine_similarity(embeddings)
-    phrase_to_idx = {phrase: idx for idx, phrase in enumerate(key_phrases)}
 
-    # Step 4: Add nodes
-    for alias in aliased_phrases:
-        G.add_node(alias, label=alias, color="#008080")
-
-    # Step 5: Add edges between alias nodes based on underlying phrase similarity
+    # Thershold factor. Increase to increase noise. Decrease for vice-versa.
     threshold = 0.5
-    for i, alias_i in enumerate(aliased_phrases):
-        similarity_scores = []
-        for j, alias_j in enumerate(aliased_phrases):
-            if i == j:
-                continue
-            sim_score = compute_alias_similarity(alias_i, alias_j, alias_to_phrases, phrase_to_idx, similarity_matrix)
-            similarity_scores.append((alias_j, sim_score))
 
-        # Top 3 connections
-        sorted_scores = sorted(similarity_scores, key=lambda x: x[1], reverse=True)[:3]
-        for alias_j, score in sorted_scores:
+    for i, phrase_i in enumerate(key_phrases):
+        G.add_node(phrase_i, label=phrase_i, color="#008080")
+        similarity_scores = [
+            (key_phrases[j], similarity_matrix[i][j])
+            for j in range(len(key_phrases))
+            if i != j and phrase_to_source[phrase_i] != phrase_to_source[key_phrases[j]]
+        ]
+        sorted_scores = sorted(similarity_scores, key=lambda x: x[1], reverse=True)[:3]  # Top 3 connections
+        for phrase_j, score in sorted_scores:
             if score > threshold:
-                G.add_edge(alias_i, alias_j)
+                G.add_edge(phrase_i, phrase_j)
 
     return G
 
 
 # Helper function to extract key phrases
 def extract_key_phrases(content, top_n=50):
-    """Extract key phrases using KeyBERT."""
+    """Extract top-n key phrases using KeyBERT."""
     keywords = keybert_model.extract_keywords(content, keyphrase_ngram_range=(1, 2), stop_words="english", top_n=top_n)
     return [kw[0] for kw in keywords]
 
@@ -219,9 +163,7 @@ def generate_insight_mistral(prompt):
     return output.strip()
 
 
-
-
-# Generate insights from the graph and data
+# Generating insights from the graph and csv data
 def generate_insights(G, data):
     """Generate concise, meaningful, and insightful paragraphs using LLM with transcript context."""
     insights = []
@@ -240,13 +182,11 @@ def generate_insights(G, data):
 
         # Extract detailed context for the crux node from the transcripts or content
         crux_context = data.loc[data["Content"].str.contains(crux_node, na=False, case=False), "Content"].head(1).values
-        context_summary = (
-            crux_context[0] if crux_context.size > 0 else "No specific context available."
-        )
+        context_summary = (crux_context[0] if crux_context.size > 0 else "No specific context available.")
 
         # Construct the LLM prompt
         prompt = (
-            "You are my personal assistant examining knowledge relationships. Analyze these high-confidence"
+            "You are my personal assistant examining knowledge relationships. Analyze these high-confidence" 
             "triplets and provide concise strategic insights about the underlying patterns, themes, or implications.\n\n"
             f"Main Topic: \"{crux_node}\"\n"
             f"Related Themes: {neighbor_summary}\n\n"
@@ -263,7 +203,7 @@ def generate_insights(G, data):
         try:
             # Generate insight using LLM
             print("=== PROMPT ===")
-            # print(prompt)
+            print(prompt)
             print("==============")
 
             response = generate_insight_mistral(prompt)
@@ -294,7 +234,6 @@ if st.sidebar.button("Generate Connections"):
 
 # Retrieve current section from session state
 section = st.session_state.section
-
 
 # Add Content Section
 if section == "Add Content":

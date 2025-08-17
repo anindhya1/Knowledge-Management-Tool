@@ -1,21 +1,38 @@
-import streamlit as st
+"""
+This the first iteration of the project 'ALCMEAON'. Here we are using KEYBERT to break text into key phrases. A certain
+number of top n phrases are then chosen, to maintain high degree of relevance. The phrases are then converted into
+embeddings and using cosine similarities, under a certain threshold value, connection are made between the these phrases.
+This is then represented as a knowledge graph. The key phrases are treated as nodes, and those nodes that are connected
+are represented as edges.
+Now, having created a wide number of node-edge pairs, there would be some nodes that will have more connections than
+the rest. These nodes are treated as central-nodes, which we call crux nodes here. These central nodes are given higher
+weightage. This is done by calculating 'node centrality'.
+These central nodes are then, along with the older content are thrown into the LLM (in this case Mistral), packaged into
+a prompt. This helps the LLM know where to lay focus, considering what is being asked of it.
+
+- @Author: Anindhya Kushagra
+- Spervised by Thomas J. Borrelli
+- Rochester Institute of Technology
+"""
+
 import pandas as pd
-import networkx as nx
 from pyvis.network import Network
+from sklearn.metrics.pairwise import cosine_similarity
 from youtube_transcript_api import YouTubeTranscriptApi
 from newspaper import Article
 from urllib.parse import urlparse
 import requests
 from bs4 import BeautifulSoup
-from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
 from keybert import KeyBERT
 from transformers import pipeline
 import PyPDF2
 from docx import Document
+import networkx as nx
 import os
 import requests
 import json
+import streamlit as st
 
 # Initialize a local text-generation pipeline
 # text_generator = pipeline("text-generation", model="gpt2")
@@ -31,8 +48,11 @@ if "knowledge_data.csv" not in os.listdir():
 # Load existing data
 data = pd.read_csv("knowledge_data.csv")
 
-# Custom CSS for theming
+
 def add_custom_css():
+    """
+    To maintain a decent UX, frontend is directly being integrated here.
+    """
     st.markdown(
         """
         <style>
@@ -80,7 +100,6 @@ def add_custom_css():
 add_custom_css()
 
 # Define the generate_knowledge_graph function
-# Define the generate_knowledge_graph function
 def generate_knowledge_graph(data):
     """Generate and return the knowledge graph."""
     G = nx.Graph()
@@ -92,13 +111,10 @@ def generate_knowledge_graph(data):
         key_phrases.extend(phrases)
         phrase_to_source.update({phrase: row["Source"] for phrase in phrases})
 
-    print(key_phrases)
-    print("Length of key_phrases", len(key_phrases))
-
     embeddings = model.encode(key_phrases)
     similarity_matrix = cosine_similarity(embeddings)
 
-    # Increased similarity threshold to reduce noise
+    # Thershold factor. Increase to increase noise. Decrease for vice-versa.
     threshold = 0.5
 
     for i, phrase_i in enumerate(key_phrases):
@@ -117,14 +133,14 @@ def generate_knowledge_graph(data):
 
 
 # Helper function to extract key phrases
-# top_n is a variable that dictates how many relevant key phrases should it return
 def extract_key_phrases(content, top_n=50):
-    """Extract key phrases using KeyBERT."""
+    """Extract top-n key phrases using KeyBERT."""
     keywords = keybert_model.extract_keywords(content, keyphrase_ngram_range=(1, 2), stop_words="english", top_n=top_n)
     return [kw[0] for kw in keywords]
 
 
 def generate_insight_mistral(prompt):
+    """Mistral seemed like the best choice for a local-logical reasoning model."""
     response = requests.post(
         "http://localhost:11434/api/generate",
         json={
@@ -149,9 +165,7 @@ def generate_insight_mistral(prompt):
     return output.strip()
 
 
-
-
-# Generate insights from the graph and data
+# Generating insights from the graph and csv data
 def generate_insights(G, data):
     """Generate concise, meaningful, and insightful paragraphs using LLM with transcript context."""
     insights = []
@@ -170,9 +184,7 @@ def generate_insights(G, data):
 
         # Extract detailed context for the crux node from the transcripts or content
         crux_context = data.loc[data["Content"].str.contains(crux_node, na=False, case=False), "Content"].head(1).values
-        context_summary = (
-            crux_context[0] if crux_context.size > 0 else "No specific context available."
-        )
+        context_summary = (crux_context[0] if crux_context.size > 0 else "No specific context available.")
 
         # Construct the LLM prompt
         prompt = (
@@ -181,7 +193,8 @@ def generate_insights(G, data):
             f"Related Themes: {neighbor_summary}\n\n"
             "Context:\n"
             f"\"\"\"\n{context_summary}\n\"\"\"\n\n"
-            "Based on the above, write a concise, original insight that draws a meaningful connection between the topic and its themes. "
+            "Based on the above, write a concise, original insight that draws a meaningful connection between the topic "
+            "and its themes. "
             "Avoid stating the obvious, and highlight a non-trivial pattern or implication.\n\n"
             "Keep the insight within 3–5 sentences."
         )
@@ -207,11 +220,7 @@ def generate_insights(G, data):
     return "\n\n".join(insights)
 
 
-
-
-
 # Streamlit App UI
-# Initialize session state for navigation
 if "section" not in st.session_state:
     st.session_state.section = "Add Content"
 
@@ -226,7 +235,6 @@ if st.sidebar.button("Generate Connections"):
 
 # Retrieve current section from session state
 section = st.session_state.section
-
 
 # Add Content Section
 if section == "Add Content":

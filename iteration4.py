@@ -806,23 +806,18 @@ if section == "Add Content":
         elif submit_file:
             st.warning("Please enter a title and upload a file")
 
-
     elif input_type == "Enter Text":
         with st.form("text_form"):
             title = st.text_input("Enter a short title for this text")
             content = st.text_area("Enter text", height=200)
             submit_text = st.form_submit_button("Add Content from Text")
+
         if submit_text and title.strip() and content.strip():
-            max_chars = 50000
-            if len(content) > max_chars:
-                st.warning(f"Text is too long ({len(content)} characters). Truncating to {max_chars} characters to"
-                           f" prevent processing issues.")
-                content = content[:max_chars] + "... [Text truncated due to length]"
-                source = "User Input"
+            source = "User Input"
             new_entry = {"Title": title.strip(), "Source": source.strip(), "Content": content.strip()}
             if save_data(new_entry):
                 st.success("Content added and saved successfully!")
-                st.rerun()
+                st.rerun()  # Refresh the page
             else:
                 st.error("Failed to save content")
         elif submit_text:

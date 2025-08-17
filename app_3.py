@@ -1,4 +1,19 @@
-# This is the REBEL version, built on the logic of app_2.
+"""
+This the third iteration of the project 'ALCMEAON'. Here we use a different approach by introducing the REBEL model.
+The REBEL model is replacing the cosine similarity method to make connections. Further, it does not deal with key-phrases.
+Rather it requires sentences. In those sentences it looks for Subject-Predicate-Object relations. This grammar rule
+is the basis for creating connections. And to clarify another important factor, instead of KEYBERT we are using spacy,
+and its underlying models to extract the right sentences from the content of the csv file we load.
+Now, having created a wide number of node-edge pairs, there would be some nodes that will have more connections than
+the rest. These nodes are treated as central-nodes, which we call crux nodes here. These central nodes are given higher
+weightage. This is done by calculating 'node centrality'.
+These central nodes are then, along with the older content are thrown into the LLM (in this case Mistral), packaged into
+a prompt. This helps the LLM know where to lay focus, considering what is being asked of it.
+
+- @Author: Anindhya Kushagra
+- Spervised by Thomas J. Borrelli
+- Rochester Institute of Technology
+"""
 
 import streamlit as st
 import pandas as pd
@@ -27,9 +42,6 @@ import nltk
 from nltk import sent_tokenize
 nltk.download('punkt')
 
-
-# Initialize a local text-generation pipeline
-# text_generator = pipeline("text-generation", model="gpt2")
 
 """Loading Models"""
 
@@ -101,6 +113,7 @@ add_custom_css()
 
 
 def compute_alias_similarity(alias1, alias2, alias_to_phrases, phrase_to_idx, similarity_matrix):
+    """Nodes that practically mean the same thing are combined into one, this helps maintain disparity among phrases."""
     phrases1 = alias_to_phrases[alias1]
     phrases2 = alias_to_phrases[alias2]
 
@@ -115,9 +128,7 @@ def compute_alias_similarity(alias1, alias2, alias_to_phrases, phrase_to_idx, si
 
 
 def alias_key_phrases(phrases, eps=0.4, min_samples=1):
-    """
-    Cluster semantically similar phrases and return a mapping: original -> alias
-    """
+    """Cluster semantically similar phrases and return a mapping: original -> alias"""
     embeddings = model.encode(phrases)
     clustering = DBSCAN(eps=eps, min_samples=min_samples, metric="cosine").fit(embeddings)
 
@@ -141,6 +152,7 @@ def alias_key_phrases(phrases, eps=0.4, min_samples=1):
 
 
 def extract_triplets_with_rebel(text, tokenizer, model, max_input_tokens=512):
+    """The REBEL model breaks sentences into triplets based on the grammar rule of Subject-Predicate-Object"""
     inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=max_input_tokens)
     outputs = model.generate(**inputs, max_length=512)
     decoded = tokenizer.batch_decode(outputs, skip_special_tokens=True)[0]
@@ -164,7 +176,6 @@ def extract_triplets_with_rebel(text, tokenizer, model, max_input_tokens=512):
         i += 3
 
     return triplets
-
 
 
 # Define the generate_knowledge_graph function
@@ -244,7 +255,6 @@ def generate_knowledge_graph(data):
 
 
 # Helper function to extract key phrases
-# top_n is a variable that dictates how many relevant key phrases should it return
 def extract_key_phrases(content, top_n=50):
     """Extract key phrases using KeyBERT."""
     keywords = keybert_model.extract_keywords(content, keyphrase_ngram_range=(1, 2), stop_words="english", top_n=top_n)
@@ -252,6 +262,7 @@ def extract_key_phrases(content, top_n=50):
 
 
 def generate_insight_mistral(prompt):
+    """Mistral seemed like the best choice for a local-logical reasoning model."""
     response = requests.post(
         "http://localhost:11434/api/generate",
         json={
@@ -274,8 +285,6 @@ def generate_insight_mistral(prompt):
     except Exception as e:
         output = f"Error: {e}"
     return output.strip()
-
-
 
 
 # Generate insights from the graph and data
@@ -303,42 +312,32 @@ def generate_insights(G, data):
 
         # Construct the LLM prompt
         prompt = (
-            "You are a research analyst generating strategic insights from cross-domain knowledge.\n\n"
+            "You are my personal assistant examining knowledge relationships. Analyze these high-confidence"
+            "triplets and provide concise strategic insights about the underlying patterns, themes, or implications.\n\n"
             f"Main Topic: \"{crux_node}\"\n"
             f"Related Themes: {neighbor_summary}\n\n"
             "Context:\n"
             f"\"\"\"\n{context_summary}\n\"\"\"\n\n"
-            "Based on the above, write a concise, original insight that draws a meaningful connection between the topic and its themes. "
+            "Based on the above, write a concise, original insight that draws a meaningful connection between the topic "
+            "and its themes. "
             "Avoid stating the obvious, and highlight a non-trivial pattern or implication.\n\n"
             "Keep the insight within 3–5 sentences."
         )
 
-        print("Length of prompt: ", len(prompt))
-
         try:
-            # Generate insight using LLM
-            print("=== PROMPT ===")
-            # print(prompt)
-            print("==============")
-
             response = generate_insight_mistral(prompt)
             clean_response = response.strip()  # Remove any unnecessary formatting or text
             insights.append(clean_response)
         except Exception as e:
             insights.append(f"Error generating insight for '{crux_node}': {e}")
 
-    # Handle cases with no valid insights
     if not insights or all("Error generating insight" in insight for insight in insights):
         insights = ["No meaningful insights could be generated from the data."]
 
     return "\n\n".join(insights)
 
 
-
-
-
 # Streamlit App UI
-# Initialize session state for navigation
 if "section" not in st.session_state:
     st.session_state.section = "Add Content"
 
@@ -351,7 +350,6 @@ if st.sidebar.button("Saved Content"):
 if st.sidebar.button("Generate Connections"):
     st.session_state.section = "Generate Connections"
 
-# Retrieve current section from session state
 section = st.session_state.section
 
 

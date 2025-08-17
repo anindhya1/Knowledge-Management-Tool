@@ -1,11 +1,9 @@
 """
-This the second iteration of the project 'ALCMEAON'. Here we are using KEYBERT to break text into key phrases. But this
-time we add the idea of aliasing. This helps us merge those nodes that basically mean the same thing. That way we have
- more disparate phrases when we go to select key phrases. Again, a certain number of top n phrases are then chosen,
- to maintain high degree of relevance. The phrases are then converted into embeddings and using cosine similarities,
-under a certain threshold value, connection are made between the these phrases.
-This is then represented as a knowledge graph. The key phrases are treated as nodes, and those nodes that are connected
-are represented as edges.
+This the third iteration of the project 'ALCMEAON'. Here we use a different approach by introducing the REBEL model.
+The REBEL model is replacing the cosine similarity method to make connections. Further, it does not deal with key-phrases.
+Rather it requires sentences. In those sentences it looks for Subject-Predicate-Object relations. This grammar rule
+is the basis for creating connections. And to clarify another important factor, instead of KEYBERT we are using spacy,
+and its underlying models to extract the right sentences from the content of the csv file we load.
 Now, having created a wide number of node-edge pairs, there would be some nodes that will have more connections than
 the rest. These nodes are treated as central-nodes, which we call crux nodes here. These central nodes are given higher
 weightage. This is done by calculating 'node centrality'.
@@ -16,6 +14,7 @@ a prompt. This helps the LLM know where to lay focus, considering what is being 
 - Spervised by Thomas J. Borrelli
 - Rochester Institute of Technology
 """
+
 import streamlit as st
 import pandas as pd
 import networkx as nx
@@ -28,26 +27,42 @@ from bs4 import BeautifulSoup
 from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
 from keybert import KeyBERT
-from transformers import pipeline
+from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM
 import PyPDF2
 from docx import Document
 from sklearn.cluster import DBSCAN
 from collections import defaultdict
 import os
+import re
 import requests
+from spacy.lang.en import English
+import spacy
 import json
+import nltk
+from nltk import sent_tokenize
 
+nltk.download('punkt')
+
+"""Loading Models"""
 
 # NLP models
 model = SentenceTransformer('all-MiniLM-L6-v2')
 keybert_model = KeyBERT(model='all-MiniLM-L6-v2')
 
-# Initialize csv file
+# Load REBEL model
+rebel_tokenizer = AutoTokenizer.from_pretrained("Babelscape/rebel-large")
+rebel_model = AutoModelForSeq2SeqLM.from_pretrained("Babelscape/rebel-large")
+
+# Load spaCy NER
+nlp = spacy.load("en_core_web_sm")
+
+# Initialize data storage
 if "knowledge_data.csv" not in os.listdir():
     pd.DataFrame(columns=["Source", "Content"]).to_csv("knowledge_data.csv", index=False)
 
 # Load existing data
 data = pd.read_csv("knowledge_data.csv")
+
 
 # Custom CSS for theming
 def add_custom_css():
@@ -94,12 +109,13 @@ def add_custom_css():
         unsafe_allow_html=True
     )
 
+
 # Add CSS to the app
 add_custom_css()
 
 
 def compute_alias_similarity(alias1, alias2, alias_to_phrases, phrase_to_idx, similarity_matrix):
-    """Aliasing helps declutter the graph, by combining similar nodes. That way we make sure """
+    """Nodes that practically mean the same thing are combined into one, this helps maintain disparity among phrases."""
     phrases1 = alias_to_phrases[alias1]
     phrases2 = alias_to_phrases[alias2]
 
@@ -113,7 +129,7 @@ def compute_alias_similarity(alias1, alias2, alias_to_phrases, phrase_to_idx, si
     return max(scores) if scores else 0
 
 
-def alias_key_phrases(phrases, eps=0.2, min_samples=1):
+def alias_key_phrases(phrases, eps=0.4, min_samples=1):
     """Cluster semantically similar phrases and return a mapping: original -> alias"""
     embeddings = model.encode(phrases)
     clustering = DBSCAN(eps=eps, min_samples=min_samples, metric="cosine").fit(embeddings)
@@ -136,38 +152,66 @@ def alias_key_phrases(phrases, eps=0.2, min_samples=1):
     return phrase_to_alias
 
 
+def extract_triplets_with_rebel(text, tokenizer, model, max_input_tokens=512):
+    """The REBEL model breaks sentences into triplets based on the grammar rule of Subject-Predicate-Object"""
+    inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=max_input_tokens)
+    outputs = model.generate(**inputs, max_length=512)
+    decoded = tokenizer.batch_decode(outputs, skip_special_tokens=True)[0]
+
+    print(f"\n[REBEL Output] {decoded}\n")
+
+    tokens = decoded.strip().split()
+
+    # Sliding window extraction (subject, object, relation) or (subject, relation, object)
+    triplets = []
+    i = 0
+    while i + 2 < len(tokens):
+        subj = tokens[i]
+        rel = tokens[i + 1]
+        obj = tokens[i + 2]
+
+        # Heuristic: avoid junk triples, check that these aren't just stopwords or repeated words
+        if all(len(tok.strip()) > 2 for tok in [subj, rel, obj]):
+            triplets.append((subj, rel, obj))
+
+        i += 3
+
+    return triplets
+
+
 # Define the generate_knowledge_graph function
 def generate_knowledge_graph(data):
-    """Generate and return the knowledge graph using alias nodes based on key phrase similarity."""
+    """Generate knowledge graph using alias-based similarity + REBEL triplets."""
     G = nx.Graph()
     key_phrases = []
     phrase_to_source = {}
 
+    # Step 1: Extract key phrases
     for index, row in data.iterrows():
-        phrases = extract_key_phrases(row["Content"], top_n=30)  # You can adjust top_n here
+        phrases = extract_key_phrases(row["Content"], top_n=30)
         key_phrases.extend(phrases)
         phrase_to_source.update({phrase: row["Source"] for phrase in phrases})
 
-    # Step 1: Semantic aliasing
+    # Step 2: Alias key phrases
     phrase_to_alias = alias_key_phrases(key_phrases)
     aliased_phrases = list(set(phrase_to_alias.values()))
 
-    # Step 2: Map aliases to original phrases
+    # Step 3: Map aliases to original phrases
     alias_to_phrases = defaultdict(list)
     for phrase in key_phrases:
         alias = phrase_to_alias[phrase]
         alias_to_phrases[alias].append(phrase)
 
-    # Step 3: Compute similarity between original key phrases
+    # Step 4: Compute similarity matrix of raw key phrases
     embeddings = model.encode(key_phrases)
     similarity_matrix = cosine_similarity(embeddings)
     phrase_to_idx = {phrase: idx for idx, phrase in enumerate(key_phrases)}
 
-    # Step 4: Add nodes
+    # Step 5: Add alias nodes
     for alias in aliased_phrases:
         G.add_node(alias, label=alias, color="#008080")
 
-    # Step 5: Add edges between alias nodes based on underlying phrase similarity
+    # Step 6: Add edges between aliases based on similarity of underlying key phrases
     threshold = 0.5
     for i, alias_i in enumerate(aliased_phrases):
         similarity_scores = []
@@ -177,11 +221,35 @@ def generate_knowledge_graph(data):
             sim_score = compute_alias_similarity(alias_i, alias_j, alias_to_phrases, phrase_to_idx, similarity_matrix)
             similarity_scores.append((alias_j, sim_score))
 
-        # Top 3 connections
-        sorted_scores = sorted(similarity_scores, key=lambda x: x[1], reverse=True)[:3]
-        for alias_j, score in sorted_scores:
+        for alias_j, score in sorted(similarity_scores, key=lambda x: x[1], reverse=True)[:3]:
             if score > threshold:
-                G.add_edge(alias_i, alias_j)
+                G.add_edge(alias_i, alias_j, label="semantic_sim")
+
+    # Step 7: Extract REBEL triplets from context sentences
+    alias_contexts = defaultdict(list)
+    for alias in aliased_phrases:
+        for _, row in data.iterrows():
+            if alias.lower() in row["Content"].lower():
+                sentences = sent_tokenize(row["Content"])
+                for sentence in sentences:
+                    if alias.lower() in sentence.lower():
+                        alias_contexts[alias].append(sentence)
+
+    triplets = set()
+    for alias, sentences in alias_contexts.items():
+        for sentence in sentences[:7]:
+            try:
+                triplets.update(extract_triplets_with_rebel(sentence, rebel_tokenizer, rebel_model))
+                print(triplets)
+            except Exception as e:
+                print(f"REBEL failed on: {sentence[:80]}...")
+
+    # Step 8: Add triplet nodes + edges
+    for subj, rel, obj in triplets:
+        G.add_node(subj, label=subj, color="#FF8C00")
+        G.add_node(obj, label=obj, color="#FF8C00")
+        G.add_edge(subj, obj, label=rel)
+        print(f"REBEL triplet added: ({subj}, {rel}, {obj})")
 
     return G
 
@@ -217,8 +285,6 @@ def generate_insight_mistral(prompt):
     except Exception as e:
         output = f"Error: {e}"
     return output.strip()
-
-
 
 
 # Generate insights from the graph and data
@@ -258,21 +324,13 @@ def generate_insights(G, data):
             "Keep the insight within 3–5 sentences."
         )
 
-        print("Length of prompt: ", len(prompt))
-
         try:
-            # Generate insight using LLM
-            print("=== PROMPT ===")
-            # print(prompt)
-            print("==============")
-
             response = generate_insight_mistral(prompt)
             clean_response = response.strip()  # Remove any unnecessary formatting or text
             insights.append(clean_response)
         except Exception as e:
             insights.append(f"Error generating insight for '{crux_node}': {e}")
 
-    # Handle cases with no valid insights
     if not insights or all("Error generating insight" in insight for insight in insights):
         insights = ["No meaningful insights could be generated from the data."]
 
@@ -292,9 +350,7 @@ if st.sidebar.button("Saved Content"):
 if st.sidebar.button("Generate Connections"):
     st.session_state.section = "Generate Connections"
 
-# Retrieve current section from session state
 section = st.session_state.section
-
 
 # Add Content Section
 if section == "Add Content":
