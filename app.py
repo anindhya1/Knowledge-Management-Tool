@@ -1,5 +1,5 @@
 """
-This the first iteration of the project 'ALCMEAON'. Here we are using KEYBERT to break text into key phrases. A certain
+This the first iteration of the project. Here we are using KEYBERT to break text into key phrases. A certain
 number of top n phrases are then chosen, to maintain high degree of relevance. The phrases are then converted into
 embeddings and using cosine similarities, under a certain threshold value, connection are made between the these phrases.
 This is then represented as a knowledge graph. The key phrases are treated as nodes, and those nodes that are connected
