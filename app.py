@@ -11,8 +11,6 @@ These central nodes are then, along with the older content are thrown into the L
 a prompt. This helps the LLM know where to lay focus, considering what is being asked of it.
 
 - @Author: Anindhya Kushagra
-- Spervised by Thomas J. Borrelli
-- Rochester Institute of Technology
 """
 
 import pandas as pd
