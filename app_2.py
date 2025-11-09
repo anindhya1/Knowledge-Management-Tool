@@ -1,5 +1,5 @@
 """
-This the second iteration of the project 'ALCMEAON'. Here we are using KEYBERT to break text into key phrases. But this
+This the second iteration of the project. Here we are using KEYBERT to break text into key phrases. But this
 time we add the idea of aliasing. This helps us merge those nodes that basically mean the same thing. That way we have
  more disparate phrases when we go to select key phrases. Again, a certain number of top n phrases are then chosen,
  to maintain high degree of relevance. The phrases are then converted into embeddings and using cosine similarities,

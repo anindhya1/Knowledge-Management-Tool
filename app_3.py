@@ -1,5 +1,5 @@
 """
-This the third iteration of the project 'ALCMEAON'. Here we use a different approach by introducing the REBEL model.
+This the third iteration of the project. Here we use a different approach by introducing the REBEL model.
 The REBEL model is replacing the cosine similarity method to make connections. Further, it does not deal with key-phrases.
 Rather it requires sentences. In those sentences it looks for Subject-Predicate-Object relations. This grammar rule
 is the basis for creating connections. And to clarify another important factor, instead of KEYBERT we are using spacy,
