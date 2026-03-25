@@ -63,7 +63,7 @@ This enhanced version supports semantic aliasing of key phrases, relation triple
 5. Run the application:
 
     ```bash
-    streamlit run app.py
+    streamlit run frontend/app.py
     ```
 
 ## Usage
