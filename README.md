@@ -73,24 +73,36 @@ This enhanced version supports semantic aliasing of key phrases, relation triple
    - **URL**: Enter a link to a YouTube video or an article.
    - **File Upload**: Upload a `.txt`, `.pdf`, or `.docx` file.
    - **Text Input**: Enter custom text.
-3. Click the corresponding button to process and save the content.
+3. Provide a short title and submit — the content is saved to `knowledge_data.csv`.
 
 ### Saved Content
 View a list of all added content in the "Saved Content" section.
 
 ### Generate Connections
 1. Navigate to the "Generate Connections" section.
-2. Click the button to create a knowledge graph.
-3. View the graph, explore semantic connections and REBEL triplets, and review AI-generated insights.
+2. Choose an extraction method:
+   - **spacy**: Fast, uses dependency parsing only.
+   - **llm**: Uses Mistral to extract triplets (requires Ollama running).
+   - **combined**: Runs both methods and merges results.
+3. Optionally adjust the minimum confidence threshold under "Advanced Options".
+4. Click "Generate Semantic Graph" to build the graph and view AI-generated insights.
 
 ## File Structure
 ```
 .
-├── app.py               # Main Streamlit application
-├── requirements.txt     # Python dependencies
-├── knowledge_data.csv   # Local storage for added content
-├── README.md            # Project documentation
-└── assets/              # Static assets (e.g., images, icons)
+├── backend/
+│   ├── config.py            # ENTITY_TYPES, RELATION_CATEGORIES, CSV_FILE
+│   ├── llm_client.py        # Mistral/Ollama API call
+│   ├── data_manager.py      # load_data(), save_data()
+│   ├── content_extractor.py # YouTube transcript and article extraction
+│   ├── nlp_processor.py     # Triplet extraction, entity/relation classifiers
+│   ├── graph_builder.py     # generate_semantic_knowledge_graph()
+│   └── insight_generator.py # generate_semantic_insights()
+├── frontend/
+│   └── app.py               # Streamlit UI (navigation, forms, graph rendering)
+├── requirements.txt         # Python dependencies
+├── knowledge_data.csv       # Local storage for added content
+└── README.md
 ```
 
 
