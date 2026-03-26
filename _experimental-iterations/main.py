@@ -205,4 +205,4 @@ elif section == "Generate Connections":
         st.warning("No data available to generate connections!")
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("Built with ❤️ using Streamlit.")
+st.sidebar.markdown("Built using Streamlit.")
